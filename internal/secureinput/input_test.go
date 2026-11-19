@@ -75,6 +75,24 @@ func TestReadUsesProvidedStdinAndRejectsMissingOversizeOrReadFailure(t *testing.
 	}
 }
 
+func TestReadRejectsNonRegularPaths(t *testing.T) {
+	directory := t.TempDir()
+	if _, err := Read(directory, strings.NewReader("unused"), 64); err == nil {
+		t.Fatal("directory: got nil error, want rejection")
+	}
+
+	target := filepath.Join(directory, "target")
+	if err := os.WriteFile(target, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(directory, "link")
+	if err := os.Symlink(target, link); err == nil {
+		if _, err := Read(link, strings.NewReader("unused"), 64); err == nil {
+			t.Fatal("symlink: got nil error, want rejection")
+		}
+	}
+}
+
 type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) {
