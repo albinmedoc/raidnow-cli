@@ -2,15 +2,14 @@ package session
 
 import (
 	"bytes"
-	"mime"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/albinmedoc/raidnow-cli/internal/htmlscript"
 	"github.com/tdewolff/parse/v2"
 	jsparser "github.com/tdewolff/parse/v2/js"
-	"golang.org/x/net/html"
 )
 
 func extractToken(body []byte) (token string, err error) {
@@ -21,69 +20,23 @@ func extractToken(body []byte) (token string, err error) {
 		}
 	}()
 
-	document, parseErr := html.Parse(bytes.NewReader(body))
+	sources, parseErr := htmlscript.Sources(body)
 	if parseErr != nil {
 		return "", errBootstrap
 	}
 
 	var candidates []string
-	if collectErr := collectScriptCandidates(document, false, &candidates); collectErr != nil {
-		return "", errBootstrap
+	for _, source := range sources {
+		found, collectErr := candidatesFromScript(source)
+		if collectErr != nil {
+			return "", errBootstrap
+		}
+		candidates = append(candidates, found...)
 	}
 	if len(candidates) != 1 || !tokenIsValid(candidates[0]) {
 		return "", errBootstrap
 	}
 	return candidates[0], nil
-}
-
-func collectScriptCandidates(node *html.Node, inTemplate bool, candidates *[]string) error {
-	if node.Type == html.ElementNode && node.Data == "template" {
-		inTemplate = true
-	}
-	if !inTemplate && node.Type == html.ElementNode && node.Namespace == "" && node.Data == "script" && executableInlineScript(node) {
-		var source strings.Builder
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			if child.Type == html.TextNode {
-				source.WriteString(child.Data)
-			}
-		}
-		found, err := candidatesFromScript([]byte(source.String()))
-		if err != nil {
-			return errBootstrap
-		}
-		*candidates = append(*candidates, found...)
-	}
-	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		if err := collectScriptCandidates(child, inTemplate, candidates); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func executableInlineScript(node *html.Node) bool {
-	scriptType := ""
-	for _, attribute := range node.Attr {
-		switch attribute.Key {
-		case "src", "href":
-			return false
-		case "type":
-			scriptType = strings.TrimSpace(attribute.Val)
-		}
-	}
-	if scriptType == "" || strings.EqualFold(scriptType, "module") {
-		return true
-	}
-	mediaType, _, err := mime.ParseMediaType(scriptType)
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(mediaType) {
-	case "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript":
-		return true
-	default:
-		return false
-	}
 }
 
 func candidatesFromScript(source []byte) ([]string, error) {
