@@ -38,6 +38,8 @@ Run this in a user-owned, non-world-writable directory. On supported Bash/POSIX 
 
 When reading `--token-file` on Unix, the CLI opens the descriptor with no-follow, nonblocking, and no-controlling-terminal flags, then verifies that the opened descriptor is a regular file owned by the effective user and inaccessible to group and others. These descriptor and ownership guarantees are Unix-specific. `--token-file` is intended for future commands that consume an existing anonymous token; `token get` ignores `--token-file` because it fetches a new token. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
 
+The form transport is stateless: callers provide the token on each request, and write requests are never retried automatically.
+
 ## Trainer input
 
 Commands that need trainer identity will bind invocation-local `--trainer-name`, `--trainer-level`, `--trainer-country`, and `--trainer-code-file <path|->` flags. They validate the values only when that command runs and keep the normalized trainer identity in process memory. Country values are normalized to lowercase and bounded to 16 UTF-8 bytes without imposing a fixed country catalog.
