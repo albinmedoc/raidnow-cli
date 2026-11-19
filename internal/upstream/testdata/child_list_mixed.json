@@ -4,7 +4,7 @@
     {"rplc_id":"p1","rplc_tid":"PlayerOne","rplc_level":"50","rplc_country_code":" SE ","rplc_lang":0,"evaluatescore_guest":"5","rplc_ready":1,"my":"1"},
     {"rplc_tid":"PlayerTwo","rplc_level":44,"rplc_lang":0,"evaluatescore_guest":-1},
     {"rplc_tid":"PlayerThree","rplc_lang":"1","evaluatescore_guest":" ","pc_raid_evaluate_score_guest":4},
-    {"rplc_tid":"Invalid","rplc_lang":null,"evaluatescore_guest":"invalid","pc_raid_evaluate_score_guest":"3"},
+    {"rplc_tid":"OutOfRangePrimary","rplc_lang":null,"evaluatescore_guest":"6","pc_raid_evaluate_score_guest":"3"},
     {"rplc_tid":"Blank","rplc_lang":""},
     {"rplc_tid":"Whitespace","rplc_lang":"   "},
     {"rplc_tid":"NumericWorld","rplc_lang":1},
@@ -13,8 +13,8 @@
     {"rplc_tid":"NumericRatingOne","evaluatescore_guest":1},
     {"rplc_tid":"StringRatingOne","evaluatescore_guest":"1"},
     {"rplc_tid":"NullPrimary","evaluatescore_guest":null,"pc_raid_evaluate_score_guest":"2"},
-    {"rplc_tid":"MalformedPrimary","evaluatescore_guest":{},"pc_raid_evaluate_score_guest":"3"},
-    {"rplc_tid":"OutOfRange","evaluatescore_guest":"6"}
+    {"rplc_tid":"AbsentPrimary","pc_raid_evaluate_score_guest":"3"},
+    {"rplc_tid":"NegativeOutOfRange","evaluatescore_guest":"-2"}
   ],
   "readycount": "2",
   "rpl_delete": 1

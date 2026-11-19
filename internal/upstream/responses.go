@@ -162,9 +162,13 @@ func decodeRaidPlayer(entry map[string]any) (domain.RaidPlayer, bool) {
 	if !ok {
 		return domain.RaidPlayer{}, false
 	}
+	rating, ok := normalizeRating(entry["evaluatescore_guest"], entry["pc_raid_evaluate_score_guest"])
+	if !ok {
+		return domain.RaidPlayer{}, false
+	}
 	return domain.RaidPlayer{
 		ID: id, TrainerName: name, Level: level, Country: country,
-		Rating: normalizeRating(entry["evaluatescore_guest"], entry["pc_raid_evaluate_score_guest"]), Ready: ready, IsMe: isMe,
+		Rating: rating, Ready: ready, IsMe: isMe,
 	}, true
 }
 
@@ -255,25 +259,29 @@ func optionalZeroOne(value any) (bool, bool) {
 }
 
 func normalizeCountry(countryValue, languageValue any) (string, bool) {
+	var country string
 	if countryValue != nil {
-		country, ok := exactScalar(countryValue)
+		var ok bool
+		country, ok = exactScalar(countryValue)
 		if !ok {
 			return "", false
 		}
 		country = strings.ToLower(strings.TrimSpace(country))
-		if country != "" {
-			if !safeValue(country, true) {
-				return "", false
-			}
-			return country, true
+		if country != "" && !safeValue(country, true) {
+			return "", false
 		}
 	}
-	language, ok := exactScalar(languageValue)
-	if !ok {
-		return "", true
+	var language string
+	if languageValue != nil {
+		var ok bool
+		language, ok = exactScalar(languageValue)
+		if !ok {
+			return "", false
+		}
+		language = strings.TrimSpace(language)
 	}
-	if strings.TrimSpace(language) == "" {
-		return "", true
+	if country != "" {
+		return country, true
 	}
 	switch language {
 	case "0":
@@ -285,33 +293,42 @@ func normalizeCountry(countryValue, languageValue any) (string, bool) {
 	}
 }
 
-func normalizeRating(primary, fallback any) *int {
-	for _, value := range []any{primary, fallback} {
+func normalizeRating(primary, fallback any) (*int, bool) {
+	values := []any{primary, fallback}
+	texts := make([]string, len(values))
+	for index, value := range values {
 		if value == nil {
 			continue
 		}
 		text, ok := exactScalar(value)
 		if !ok {
-			return nil
+			return nil, false
 		}
-		if strings.TrimSpace(text) == "" {
+		text = strings.TrimSpace(text)
+		texts[index] = text
+		if text == "" {
 			continue
 		}
-		integer, err := json.Number(strings.TrimSpace(text)).Int64()
-		if err != nil {
-			return nil
+		if _, err := json.Number(text).Int64(); err != nil {
+			return nil, false
 		}
+	}
+	for _, text := range texts {
+		if text == "" {
+			continue
+		}
+		integer, _ := json.Number(text).Int64()
 		if integer == -1 {
 			zero := 0
-			return &zero
+			return &zero, true
 		}
 		if integer >= 1 && integer <= 5 {
 			rating := int(integer)
-			return &rating
+			return &rating, true
 		}
-		return nil
+		return nil, true
 	}
-	return nil
+	return nil, true
 }
 
 func decodeRaids(raw json.RawMessage) ([]domain.Raid, error) {
@@ -507,7 +524,7 @@ func classifyStatus(object map[string]any) error {
 func structuredRejection(object map[string]any) error {
 	text, _ := exactScalar(object["text"])
 	normalized := strings.ToLower(text)
-	if strings.Contains(normalized, "session has expired") || strings.Contains(normalized, "session expired") || strings.Contains(normalized, "login required") || strings.Contains(normalized, "please log in") || strings.Contains(normalized, "please login") || strings.Contains(normalized, "restart") {
+	if strings.Contains(normalized, "session has expired") || strings.Contains(normalized, "session expired") || strings.Contains(normalized, "login required") || strings.Contains(normalized, "please log in") || strings.Contains(normalized, "please login") || strings.Contains(normalized, "please restart") {
 		return authenticationUnsupported()
 	}
 	return upstreamRejection()

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -154,8 +153,8 @@ func TestListRaidPlayersNormalizesCountryRatingsAndCounts(t *testing.T) {
 	if got.Count != 14 || got.ReadyCount != 2 || !got.RaidDeleted {
 		t.Fatalf("summary=%#v", got)
 	}
-	countries := []string{"se", "jp", "world", "", "", "", "world", "jp", "", "", "", "", "", ""}
-	ratings := []*int{intPointer(5), intPointer(0), intPointer(4), nil, nil, nil, nil, nil, nil, intPointer(1), intPointer(1), intPointer(2), nil, nil}
+	countries := []string{"se", "jp", "world", "", "", "", "world", "jp", "jp", "", "", "", "", ""}
+	ratings := []*int{intPointer(5), intPointer(0), intPointer(4), nil, nil, nil, nil, nil, nil, intPointer(1), intPointer(1), intPointer(2), intPointer(3), nil}
 	for index := range got.Players {
 		if got.Players[index].Country != countries[index] || !reflect.DeepEqual(got.Players[index].Rating, ratings[index]) {
 			t.Fatalf("player %d=%#v", index, got.Players[index])
@@ -165,6 +164,65 @@ func TestListRaidPlayersNormalizesCountryRatingsAndCounts(t *testing.T) {
 		t.Fatalf("first player=%#v", got.Players[0])
 	}
 	assertExactForm(t, captured, url.Values{"type": {"child_list"}, "parid": {"raid-1"}, "lang": {"1"}, "token": {"token"}})
+}
+
+func TestListRaidPlayersTrimsLanguageBeforeCountryFallback(t *testing.T) {
+	body := `{"list":[{"rplc_lang":" 0 "},{"rplc_country_code":" ","rplc_lang":" 1 "},{"rplc_lang":"2"},{"rplc_lang":" "},{"rplc_lang":null},{}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte(body)) }))
+	defer server.Close()
+	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+
+	got, err := client.ListRaidPlayers(context.Background(), "token", "raid", CallOptions{})
+	if err != nil {
+		t.Fatalf("list players: %v", err)
+	}
+	want := []string{"jp", "world", "", "", "", ""}
+	for index := range want {
+		if got.Players[index].Country != want[index] {
+			t.Fatalf("player %d country=%q want=%q", index, got.Players[index].Country, want[index])
+		}
+	}
+}
+
+func TestListRaidPlayersRejectsMalformedOptionalPlayerFields(t *testing.T) {
+	testCases := []struct {
+		name  string
+		entry string
+	}{
+		{name: "country object", entry: `"rplc_country_code":{}`},
+		{name: "country array", entry: `"rplc_country_code":[]`},
+		{name: "country boolean", entry: `"rplc_country_code":true`},
+		{name: "country fractional number", entry: `"rplc_country_code":1.5`},
+		{name: "language object", entry: `"rplc_lang":{}`},
+		{name: "language array", entry: `"rplc_lang":[]`},
+		{name: "language boolean", entry: `"rplc_lang":false`},
+		{name: "language fractional number", entry: `"rplc_lang":1.5`},
+		{name: "language malformed despite country", entry: `"rplc_country_code":"se","rplc_lang":{}`},
+		{name: "primary rating object", entry: `"evaluatescore_guest":{}`},
+		{name: "primary rating array", entry: `"evaluatescore_guest":[]`},
+		{name: "primary rating boolean", entry: `"evaluatescore_guest":true`},
+		{name: "primary rating fractional number", entry: `"evaluatescore_guest":1.5`},
+		{name: "primary rating invalid text", entry: `"evaluatescore_guest":"invalid"`},
+		{name: "primary rating fractional text", entry: `"evaluatescore_guest":"1.5"`},
+		{name: "fallback rating object", entry: `"pc_raid_evaluate_score_guest":{}`},
+		{name: "fallback rating array", entry: `"pc_raid_evaluate_score_guest":[]`},
+		{name: "fallback rating boolean", entry: `"pc_raid_evaluate_score_guest":false`},
+		{name: "fallback rating fractional number", entry: `"pc_raid_evaluate_score_guest":1.5`},
+		{name: "fallback rating invalid text", entry: `"pc_raid_evaluate_score_guest":"invalid"`},
+		{name: "fallback rating fractional text", entry: `"pc_raid_evaluate_score_guest":"1.5"`},
+		{name: "fallback malformed despite primary", entry: `"evaluatescore_guest":"5","pc_raid_evaluate_score_guest":{}`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := `{"list":[{` + testCase.entry + `}],"text":"secret-marker"}`
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte(body)) }))
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+			_, err := client.ListRaidPlayers(context.Background(), "token", "raid", CallOptions{})
+			server.Close()
+			assertExitCode(t, err, output.ExitUpstreamRejection)
+			assertNoSecret(t, err)
+		})
+	}
 }
 
 func TestListRaidPlayersRejectsMalformedListAndPlayerShapes(t *testing.T) {
@@ -189,21 +247,27 @@ func TestListRaidPlayersRejectsMalformedListAndPlayerShapes(t *testing.T) {
 }
 
 func TestReadOperationsClassifyStructuredStatusAndTransportFailures(t *testing.T) {
-	for _, body := range []string{
-		`{"status":"error","text":"The session has expired. Please restart. secret-marker"}`,
-		`{"status":"error","text":"Restart the browser. secret-marker"}`,
-		`{"status":"login_required","text":"ignored secret-marker"}`,
+	for _, testCase := range []struct {
+		name     string
+		body     string
+		wantExit int
+	}{
+		{name: "session expired", body: `{"status":"error","text":"The session has expired. secret-marker"}`, wantExit: output.ExitAuthenticationUnsupported},
+		{name: "please log in", body: `{"status":"error","text":"Please log in again. secret-marker"}`, wantExit: output.ExitAuthenticationUnsupported},
+		{name: "login required", body: `{"status":"error","text":"Login required. secret-marker"}`, wantExit: output.ExitAuthenticationUnsupported},
+		{name: "please restart", body: `{"status":"error","text":"Please restart the browser. secret-marker"}`, wantExit: output.ExitAuthenticationUnsupported},
+		{name: "bare restart", body: `{"status":"error","text":"Restart the browser. secret-marker"}`, wantExit: output.ExitUpstreamRejection},
+		{name: "unrelated restart", body: `{"status":"error","text":"Could not restart operation. secret-marker"}`, wantExit: output.ExitUpstreamRejection},
+		{name: "status alone", body: `{"status":"login_required","text":"ignored secret-marker"}`, wantExit: output.ExitUpstreamRejection},
 	} {
-		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte(body)) }))
-		client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
-		_, err := client.ListRaids(context.Background(), "token", LobbyQuery{Page: 1}, CallOptions{})
-		server.Close()
-		if strings.Contains(body, "expired") || strings.Contains(body, "Restart") {
-			assertExitCode(t, err, output.ExitAuthenticationUnsupported)
-		} else {
-			assertExitCode(t, err, output.ExitUpstreamRejection)
-		}
-		assertNoSecret(t, err)
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte(testCase.body)) }))
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+			_, err := client.ListRaids(context.Background(), "token", LobbyQuery{Page: 1}, CallOptions{})
+			server.Close()
+			assertExitCode(t, err, testCase.wantExit)
+			assertNoSecret(t, err)
+		})
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
