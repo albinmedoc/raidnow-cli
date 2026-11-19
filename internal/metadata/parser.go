@@ -15,12 +15,18 @@ import (
 )
 
 const (
-	MaxHTMLBytes     = 4 << 20
-	MaxEntries       = 4096
-	MaxIDBytes       = 256
-	MaxNameBytes     = 256
-	MaxImageURLBytes = 2048
-	MaxJSONDepth     = 32
+	MaxHTMLBytes = 4 << 20
+	// MaxExecutableScriptBytes bounds each inline script before JavaScript parsing.
+	MaxExecutableScriptBytes = 2 << 20
+	// MaxJavaScriptTokens bounds lexer work and syntax-tree complexity per inline script.
+	MaxJavaScriptTokens = 100_000
+	MaxEntries          = 4096
+	MaxIDBytes          = 256
+	MaxNameBytes        = 256
+	MaxImageURLBytes    = 2048
+	MaxJSONDepth        = 32
+	// MaxJSONStructuralNodes bounds combined object, array, member, element, and scalar nodes.
+	MaxJSONStructuralNodes = 50_000
 )
 
 var ErrInvalidMetadata = errors.New("invalid pokemon metadata")
@@ -42,13 +48,16 @@ func Parse(body []byte) (catalog Catalog, err error) {
 	}
 	var candidates [][]byte
 	for _, source := range sources {
+		rawObjects, lexErr := aryPokemonJSONObjects(source)
+		if lexErr != nil {
+			return Catalog{}, ErrInvalidMetadata
+		}
 		ast, astErr := jsparser.Parse(parse.NewInputBytes(source), jsparser.Options{})
 		if astErr != nil {
 			return Catalog{}, ErrInvalidMetadata
 		}
 		objects := topLevelAryPokemonObjects(ast)
-		rawObjects, lexErr := aryPokemonJSONObjects(source)
-		if lexErr != nil || len(objects) != len(rawObjects) {
+		if len(objects) != len(rawObjects) {
 			return Catalog{}, ErrInvalidMetadata
 		}
 		for index, object := range objects {
@@ -131,12 +140,13 @@ func validateJSON(data []byte) error {
 }
 
 type strictJSONParser struct {
-	data     []byte
-	position int
+	data       []byte
+	position   int
+	structures int
 }
 
 func (parser *strictJSONParser) parseValue(depth int) error {
-	if depth > MaxJSONDepth {
+	if depth > MaxJSONDepth || parser.consumeStructure() != nil {
 		return ErrInvalidMetadata
 	}
 	parser.skipWhitespace()
@@ -171,8 +181,8 @@ func (parser *strictJSONParser) parseObject(depth int) error {
 	seen := make(map[string]struct{})
 	for {
 		key, err := parser.parseString()
-		if err != nil {
-			return err
+		if err != nil || parser.consumeStructure() != nil {
+			return ErrInvalidMetadata
 		}
 		if _, duplicate := seen[key]; duplicate {
 			return ErrInvalidMetadata
@@ -203,6 +213,9 @@ func (parser *strictJSONParser) parseArray(depth int) error {
 		return nil
 	}
 	for {
+		if parser.consumeStructure() != nil {
+			return ErrInvalidMetadata
+		}
 		if err := parser.parseValue(depth + 1); err != nil {
 			return err
 		}
@@ -343,6 +356,14 @@ func (parser *strictJSONParser) consumeByte(value byte) bool {
 	return true
 }
 
+func (parser *strictJSONParser) consumeStructure() error {
+	parser.structures++
+	if parser.structures > MaxJSONStructuralNodes {
+		return ErrInvalidMetadata
+	}
+	return nil
+}
+
 func (parser *strictJSONParser) skipWhitespace() {
 	for parser.position < len(parser.data) {
 		switch parser.data[parser.position] {
@@ -390,19 +411,31 @@ func topLevelAryPokemonObjects(ast *jsparser.AST) []*jsparser.ObjectExpr {
 }
 
 type scriptToken struct {
-	typeID jsparser.TokenType
-	data   []byte
-	start  int
-	end    int
+	typeID     jsparser.TokenType
+	aryPokemon bool
+}
+
+type objectCandidate struct {
+	start       int
+	braceDepth  int
+	objectIndex int
 }
 
 func aryPokemonJSONObjects(source []byte) ([][]byte, error) {
+	if len(source) > MaxExecutableScriptBytes {
+		return nil, ErrInvalidMetadata
+	}
 	input := parse.NewInputBytes(source)
 	lexer := jsparser.NewLexer(input)
-	var tokens []scriptToken
+	history := make([]scriptToken, 0, 3)
+	var active []objectCandidate
+	var objects [][]byte
+	var completed []bool
+	braceDepth := 0
+	tokenCount := 0
 	for {
 		typeID, data := lexer.Next()
-		if (typeID == jsparser.DivToken || typeID == jsparser.DivEqToken) && regexMayStartAfter(tokens) {
+		if (typeID == jsparser.DivToken || typeID == jsparser.DivEqToken) && regexMayStartAfter(history) {
 			typeID, data = lexer.RegExp()
 		}
 		if typeID == jsparser.ErrorToken {
@@ -414,32 +447,58 @@ func aryPokemonJSONObjects(source []byte) ([][]byte, error) {
 		if typeID == jsparser.WhitespaceToken || typeID == jsparser.LineTerminatorToken || typeID == jsparser.CommentToken || typeID == jsparser.CommentLineTerminatorToken {
 			continue
 		}
+		tokenCount++
+		if tokenCount > MaxJavaScriptTokens {
+			return nil, ErrInvalidMetadata
+		}
+
 		end := input.Offset()
-		tokens = append(tokens, scriptToken{typeID: typeID, data: data, start: end - len(data), end: end})
-	}
-	var objects [][]byte
-	for index := 0; index+2 < len(tokens); index++ {
-		if tokens[index].typeID != jsparser.IdentifierToken || string(tokens[index].data) != "aryPokemon" || tokens[index+1].typeID != jsparser.EqToken || tokens[index+2].typeID != jsparser.OpenBraceToken {
-			continue
+		token := scriptToken{
+			typeID:     typeID,
+			aryPokemon: typeID == jsparser.IdentifierToken && bytes.Equal(data, []byte("aryPokemon")),
 		}
-		if index > 0 && (tokens[index-1].typeID == jsparser.DotToken || tokens[index-1].typeID == jsparser.OptChainToken) {
-			continue
-		}
-		depth := 0
-		for cursor := index + 2; cursor < len(tokens); cursor++ {
-			switch tokens[cursor].typeID {
-			case jsparser.OpenBraceToken:
-				depth++
-			case jsparser.CloseBraceToken:
-				depth--
-				if depth == 0 {
-					objects = append(objects, source[tokens[index+2].start:tokens[cursor].end])
-					cursor = len(tokens)
-				}
+		switch typeID {
+		case jsparser.OpenBraceToken:
+			braceDepth++
+			if aryPokemonAssignmentStarts(history) {
+				objectIndex := len(objects)
+				objects = append(objects, nil)
+				completed = append(completed, false)
+				active = append(active, objectCandidate{start: end - len(data), braceDepth: braceDepth, objectIndex: objectIndex})
 			}
+		case jsparser.CloseBraceToken:
+			for len(active) > 0 && active[len(active)-1].braceDepth == braceDepth {
+				candidate := active[len(active)-1]
+				active = active[:len(active)-1]
+				objects[candidate.objectIndex] = source[candidate.start:end]
+				completed[candidate.objectIndex] = true
+			}
+			braceDepth--
+		}
+		if len(history) == cap(history) {
+			copy(history, history[1:])
+			history = history[:len(history)-1]
+		}
+		history = append(history, token)
+	}
+	finished := objects[:0]
+	for index, object := range objects {
+		if completed[index] {
+			finished = append(finished, object)
 		}
 	}
-	return objects, nil
+	return finished, nil
+}
+
+func aryPokemonAssignmentStarts(history []scriptToken) bool {
+	if len(history) < 2 || !history[len(history)-2].aryPokemon || history[len(history)-1].typeID != jsparser.EqToken {
+		return false
+	}
+	if len(history) < 3 {
+		return true
+	}
+	previous := history[len(history)-3].typeID
+	return previous != jsparser.DotToken && previous != jsparser.OptChainToken
 }
 
 func regexMayStartAfter(tokens []scriptToken) bool {

@@ -44,6 +44,57 @@ func TestParseExtractsRealisticAryPokemonCatalog(t *testing.T) {
 	}
 }
 
+func TestParseEnforcesExecutableScriptByteLimit(t *testing.T) {
+	const suffix = `";var aryPokemon={"id":{}};`
+	atLimit := `var padding="` + strings.Repeat("x", MaxExecutableScriptBytes-len(`var padding="`)-len(suffix)) + suffix
+
+	catalog, err := Parse([]byte(`<script>` + atLimit + `</script>`))
+	if err != nil || catalog.Len() != 1 {
+		t.Fatalf("Parse script at byte limit Len()=%d err=%v, want one entry", catalog.Len(), err)
+	}
+
+	assertRejected(t, []byte(`<script>`+atLimit+`;</script>`))
+}
+
+func TestParseAcceptsRealisticPageSizeAndCatalog(t *testing.T) {
+	const targetScriptBytes = 926 << 10
+	const prefix = `const pageState="`
+	const suffix = `";var aryPokemon={"150_アーマード":{"en":"Armored Mewtwo","image":"https://example.invalid/150-armored.png"},"escaped":{"en":"Snow 雪"}};`
+	source := prefix + strings.Repeat("x", targetScriptBytes-len(prefix)-len(suffix)) + suffix
+	if len(source) != targetScriptBytes {
+		t.Fatalf("realistic script size = %d, want %d", len(source), targetScriptBytes)
+	}
+
+	catalog, err := Parse([]byte(`<html><body><script>` + source + `</script></body></html>`))
+	if err != nil || catalog.Len() != 2 {
+		t.Fatalf("Parse realistic page Len()=%d err=%v, want two entries", catalog.Len(), err)
+	}
+	entry, ok := catalog.Lookup("150_アーマード")
+	if !ok || entry.ID() != "150_アーマード" || entry.Name() != "Armored Mewtwo" {
+		t.Fatalf("realistic exact form entry = %#v, %v", entry, ok)
+	}
+}
+
+func TestParseEnforcesJavaScriptTokenLimit(t *testing.T) {
+	const assignment = `var aryPokemon={"id":{}};`
+	const assignmentTokens = 10
+	atLimit := strings.Repeat(";", MaxJavaScriptTokens-assignmentTokens) + assignment
+
+	catalog, err := Parse([]byte(`<script>` + atLimit + `</script>`))
+	if err != nil || catalog.Len() != 1 {
+		t.Fatalf("Parse script at token limit Len()=%d err=%v, want one entry", catalog.Len(), err)
+	}
+
+	assertRejected(t, []byte(`<script>;`+atLimit+`</script>`))
+}
+
+func TestJavaScriptPrecheckRejectsLargeArrayBeforeSyntaxTreeParsing(t *testing.T) {
+	source := []byte(`const values=[` + strings.Repeat("0,", MaxJavaScriptTokens/2) + `0];var aryPokemon={"id":{}};`)
+	if _, err := aryPokemonJSONObjects(source); !errors.Is(err, ErrInvalidMetadata) {
+		t.Fatalf("aryPokemonJSONObjects large array error = %v, want ErrInvalidMetadata", err)
+	}
+}
+
 func TestCatalogListIsSortedAndEntriesAreValues(t *testing.T) {
 	catalog, err := Parse([]byte(`<script>var aryPokemon={"z":{"en":"Z","image":"z"},"a":{"en":"A","image":"a"}};</script>`))
 	if err != nil {
@@ -226,6 +277,27 @@ func TestParseRejectsDuplicateKeysAtEveryNestingLevel(t *testing.T) {
 	} {
 		assertRejected(t, []byte(body))
 	}
+}
+
+func TestParseEnforcesStrictJSONStructuralBudget(t *testing.T) {
+	arrayCatalog := func(elements int) []byte {
+		var values strings.Builder
+		for index := 0; index < elements; index++ {
+			if index > 0 {
+				values.WriteByte(',')
+			}
+			values.WriteByte('0')
+		}
+		return []byte(`<script>var aryPokemon={"id":{"extra":[` + values.String() + `]}};</script>`)
+	}
+
+	belowLimitElements := (MaxJSONStructuralNodes - 5) / 2
+	catalog, err := Parse(arrayCatalog(belowLimitElements))
+	if err != nil || catalog.Len() != 1 {
+		t.Fatalf("Parse JSON just below structural limit Len()=%d err=%v, want one entry", catalog.Len(), err)
+	}
+
+	assertRejected(t, arrayCatalog(belowLimitElements+1))
 }
 
 func TestParseRejectsUnsafeTypesTextAndBounds(t *testing.T) {
