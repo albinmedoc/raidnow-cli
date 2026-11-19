@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const observedToken = "AbCdEf0123456789_-AbCdEf0123456789_-AbCdEfGH"
@@ -108,7 +109,13 @@ func TestBootstrapTokenSendsBrowserLikeReadOnlyRequestWithoutSessionState(t *tes
 }
 
 func TestBootstrapTokenMatchesTheExactPropertyName(t *testing.T) {
-	server := bootstrapServer(t, http.StatusOK, "data: {not_gofriend_token: 'wrong-secret', "+`"gofriend_token" : "right-token"}`)
+	server := bootstrapServer(t, http.StatusOK, `data: {
+		$gofriend_token: 'dollar-prefixed-secret',
+		mygofriend_token: 'letter-prefixed-secret',
+		_gofriend_token: 'underscore-prefixed-secret',
+		gofriend_token_suffix: 'suffixed-secret',
+		"gofriend_token": "right-token"
+	}`)
 	bootstrap := NewBootstrap(server.Client(), server.URL)
 
 	token, err := bootstrap.Token(context.Background())
@@ -117,6 +124,22 @@ func TestBootstrapTokenMatchesTheExactPropertyName(t *testing.T) {
 	}
 	if got, want := token, "right-token"; got != want {
 		t.Fatalf("token = %q, want exact property value %q", got, want)
+	}
+}
+
+func TestBootstrapTokenDecodesHexEscapesAsJavaScriptCodePoints(t *testing.T) {
+	server := bootstrapServer(t, http.StatusOK, `data: {gofriend_token: '\x41\xE9'}`)
+	bootstrap := NewBootstrap(server.Client(), server.URL)
+
+	token, err := bootstrap.Token(context.Background())
+	if err != nil {
+		t.Fatalf("bootstrap hex-escaped token: %v", err)
+	}
+	if got, want := token, "Aé"; got != want {
+		t.Fatalf("decoded token = %q, want %q", got, want)
+	}
+	if !utf8.ValidString(token) {
+		t.Fatalf("decoded token %q is not valid UTF-8", token)
 	}
 }
 

@@ -24,7 +24,7 @@ const (
 
 var (
 	errBootstrap       = errors.New("anonymous token bootstrap failed")
-	tokenPropertyStart = regexp.MustCompile(`(?:["']gofriend_token["']|\bgofriend_token\b)\s*:\s*(["'])`)
+	tokenPropertyStart = regexp.MustCompile(`(?:["']gofriend_token["']|(?:^|[^\pL\pN\pM\p{Pc}$\x{200C}\x{200D}])gofriend_token)\s*:\s*(["'])`)
 )
 
 type Bootstrap struct {
@@ -143,7 +143,7 @@ func decodeJSString(input []byte, quote byte) (string, error) {
 			if err != nil {
 				return "", errBootstrap
 			}
-			decoded.WriteByte(byte(value))
+			decoded.WriteRune(rune(value))
 			index = next - 1
 		case 'u':
 			value, next, err := decodeHexEscape(input, index+1, 4)

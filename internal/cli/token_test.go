@@ -19,6 +19,45 @@ func (stub *stubTokenBootstrapper) Token(context.Context) (string, error) {
 	return stub.token, stub.err
 }
 
+func TestTokenFileFlagIsPersistentConfiguredAndIgnoredByTokenGet(t *testing.T) {
+	bootstrap := &stubTokenBootstrapper{token: "fresh-token"}
+	config := &RootConfig{}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap, Config: config})
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{"--token-file", "/definitely/missing/raidnow.token", "token", "get"})
+
+	if err := command.Execute(); err != nil {
+		t.Fatalf("execute token get with token file configured: %v", err)
+	}
+	if got, want := config.TokenFile, "/definitely/missing/raidnow.token"; got != want {
+		t.Fatalf("configured token file = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), "fresh-token\n"; got != want {
+		t.Fatalf("stdout = %q, want exact %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if bootstrap.calls != 1 {
+		t.Fatalf("bootstrap calls = %d, want 1", bootstrap.calls)
+	}
+
+	var help bytes.Buffer
+	helpCommand := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap, Config: &RootConfig{}})
+	helpCommand.SetOut(&help)
+	helpCommand.SetErr(&help)
+	helpCommand.SetArgs([]string{"--help"})
+	if err := helpCommand.Execute(); err != nil {
+		t.Fatalf("execute root help: %v", err)
+	}
+	if !strings.Contains(help.String(), "--token-file") || !strings.Contains(help.String(), "path or - for stdin") {
+		t.Fatalf("help output %q does not document --token-file path or stdin", help.String())
+	}
+}
+
 func TestTokenGetPrintsExactRawToken(t *testing.T) {
 	bootstrap := &stubTokenBootstrapper{token: "opaque anonymous token"}
 	var stdout bytes.Buffer

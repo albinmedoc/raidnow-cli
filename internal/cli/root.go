@@ -15,19 +15,28 @@ var (
 	BootstrapURL = session.DefaultBootstrapURL
 )
 
+type RootConfig struct {
+	TokenFile string
+}
+
 type RootOptions struct {
 	Bootstrap TokenBootstrapper
+	Config    *RootConfig
 }
 
 func NewRootCommand() *cobra.Command {
 	return NewRootCommandWithOptions(RootOptions{
 		Bootstrap: session.NewBootstrap(http.DefaultClient, BootstrapURL),
+		Config:    &RootConfig{},
 	})
 }
 
 func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	if options.Bootstrap == nil {
 		options.Bootstrap = session.NewBootstrap(http.DefaultClient, BootstrapURL)
+	}
+	if options.Config == nil {
+		options.Config = &RootConfig{}
 	}
 	var jsonOutput bool
 	command := &cobra.Command{
@@ -36,6 +45,7 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 	}
 	command.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Write compact JSON output when supported")
+	command.PersistentFlags().StringVar(&options.Config.TokenFile, "token-file", "", "Read the anonymous token from path or - for stdin")
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		return command.Help()
 	}

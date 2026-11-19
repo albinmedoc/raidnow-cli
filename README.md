@@ -22,13 +22,13 @@ go build -o raidnow ./cmd/raidnow
 ./raidnow token get
 ```
 
-Fetch a token into a user-owned file and restrict its permissions immediately:
+Fetch a token into a user-owned file with owner-only permissions from the moment it is created:
 
 ```sh
-raidnow token get > raidnow.token && chmod 600 raidnow.token
+(umask 077; raidnow token get > raidnow.token)
 ```
 
-The shell and user own that file. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
+The subshell sets a restrictive creation mask before any secret bytes are written, avoiding a window where another user could read a newly created, overly permissive file. The shell and user own that file. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
 
 Development builds report `dev`. Release builds can inject a version at link time:
 

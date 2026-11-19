@@ -12,6 +12,23 @@ import (
 	"testing"
 )
 
+func TestReadmeProtectsTokenFileBeforeWritingSecret(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	contents := string(readme)
+	if !strings.Contains(contents, "(umask 077; raidnow token get > raidnow.token)") {
+		t.Fatalf("README does not create the token file under umask 077 before writing the secret")
+	}
+	if strings.Contains(contents, "raidnow token get > raidnow.token && chmod 600 raidnow.token") {
+		t.Fatal("README still writes the token before restricting file permissions")
+	}
+	if !strings.Contains(contents, "before any secret bytes are written") {
+		t.Fatal("README does not explain why the restrictive umask must be set first")
+	}
+}
+
 func TestBinaryWithoutArgumentsPrintsHelpAndSucceeds(t *testing.T) {
 	binary := buildBinary(t)
 	workingDirectory := t.TempDir()
