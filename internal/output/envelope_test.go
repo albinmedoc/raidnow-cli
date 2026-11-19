@@ -57,6 +57,54 @@ func TestRenderJSONFailureEnvelopeHasStableSchema(t *testing.T) {
 	}
 }
 
+func TestRenderJSONNormalizesNilSuccessWarnings(t *testing.T) {
+	testCases := []struct {
+		name     string
+		envelope Envelope
+	}{
+		{name: "value", envelope: SuccessEnvelope{OK: true, Command: "version", Status: "ok", Data: "dev"}},
+		{name: "pointer", envelope: &SuccessEnvelope{OK: true, Command: "version", Status: "ok", Data: "dev"}},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var destination bytes.Buffer
+			if err := RenderJSON(&destination, testCase.envelope); err != nil {
+				t.Fatalf("render JSON success: %v", err)
+			}
+			const want = "{\"ok\":true,\"command\":\"version\",\"status\":\"ok\",\"data\":\"dev\",\"warnings\":[]}\n"
+			if got := destination.String(); got != want {
+				t.Fatalf("JSON success = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestRenderJSONRejectsNilEnvelopes(t *testing.T) {
+	var typedNilSuccess *SuccessEnvelope
+	var typedNilFailure *FailureEnvelope
+	testCases := []struct {
+		name     string
+		envelope Envelope
+	}{
+		{name: "nil"},
+		{name: "typed nil success", envelope: typedNilSuccess},
+		{name: "typed nil failure", envelope: typedNilFailure},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var destination bytes.Buffer
+			if err := RenderJSON(&destination, testCase.envelope); err == nil {
+				t.Fatal("render nil envelope: got nil error, want validation error")
+			}
+			if destination.Len() != 0 {
+				t.Fatalf("render nil envelope wrote %q, want no output", destination.String())
+			}
+		})
+	}
+}
+
 func TestRenderJSONReturnsEncodingErrors(t *testing.T) {
 	envelope := NewSuccess("search", "ok", make(chan int), nil, "")
 

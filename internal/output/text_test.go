@@ -37,6 +37,21 @@ func TestRedactMasksEveryStandaloneTrainerCode(t *testing.T) {
 	}
 }
 
+func TestRedactMasksFormattedTrainerCodesAtPunctuationBoundaries(t *testing.T) {
+	const input = "compact (123456789012), spaced: 1234 5678 9012; hyphenated=1234-5678-9012!"
+	const want = "compact ([REDACTED]), spaced: [REDACTED]; hyphenated=[REDACTED]!"
+	if got := Redact(input); got != want {
+		t.Fatalf("redacted formatted trainer codes = %q, want %q", got, want)
+	}
+}
+
+func TestRedactLeavesTrainerCodeDigitsInsideIdentifiers(t *testing.T) {
+	const input = "raid123456789012prod code1234 5678 9012prod code1234-5678-9012prod"
+	if got := Redact(input); got != input {
+		t.Fatalf("redacted identifiers = %q, want unchanged %q", got, input)
+	}
+}
+
 func TestHumanRendererWritesSwedishTextToSelectedWriter(t *testing.T) {
 	var destination bytes.Buffer
 	renderer := NewHumanRenderer(&destination, "token-value")

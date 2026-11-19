@@ -10,7 +10,7 @@ import (
 
 const redacted = "[REDACTED]"
 
-var trainerCodePattern = regexp.MustCompile(`[0-9]{12}`)
+var trainerCodePattern = regexp.MustCompile(`[0-9]{12}|[0-9]{4}([ -][0-9]{4}){2}`)
 
 type HumanRenderer struct {
 	destination io.Writer
@@ -70,7 +70,7 @@ func redactTrainerCodes(text string) string {
 	start := 0
 	for _, match := range matches {
 		left, right := match[0], match[1]
-		if (left > 0 && isASCIIDigit(text[left-1])) || (right < len(text) && isASCIIDigit(text[right])) {
+		if (left > 0 && isASCIIAlphanumeric(text[left-1])) || (right < len(text) && isASCIIAlphanumeric(text[right])) {
 			continue
 		}
 		result.WriteString(text[start:left])
@@ -84,6 +84,8 @@ func redactTrainerCodes(text string) string {
 	return result.String()
 }
 
-func isASCIIDigit(value byte) bool {
-	return value >= '0' && value <= '9'
+func isASCIIAlphanumeric(value byte) bool {
+	return (value >= '0' && value <= '9') ||
+		(value >= 'A' && value <= 'Z') ||
+		(value >= 'a' && value <= 'z')
 }
