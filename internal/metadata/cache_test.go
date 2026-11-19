@@ -625,13 +625,8 @@ func TestPermissionsExactIDFallbackAndSafeFormatting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
-		t.Fatalf("dir mode = %v, %v", info.Mode().Perm(), err)
-	}
 	path := filepath.Join(dir, cacheFilename)
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("file mode = %v, %v", info.Mode().Perm(), err)
-	}
+	assertCachePermissions(t, dir, path)
 	if name, image := DisplayForID(catalog, secretID); name != secretName || image != secretURL {
 		t.Fatalf("exact display = %q, %q", name, image)
 	}
