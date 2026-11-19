@@ -377,8 +377,16 @@ func TestExtractTokenRejectsAmbiguousOrDynamicVueObjects(t *testing.T) {
 		{name: "config_shorthand", script: `new Vue({data})`},
 		{name: "data_shorthand", script: `new Vue({data:{gofriend_token}})`},
 		{name: "config_getter", script: `new Vue({get data(){return {gofriend_token:'x'}}})`},
-		{name: "token_getter", script: `new Vue({data:{get gofriend_token(){return 'x'}}})`},
+		{name: "unrelated_getter", script: `new Vue({data:{gofriend_token:'x'},get mounted(){return true}})`},
+		{name: "unrelated_setter", script: `new Vue({data:{gofriend_token:'x'},set mounted(value){}})`},
 		{name: "config_method", script: `new Vue({data(){return {gofriend_token:'x'}}})`},
+		{name: "computed_lifecycle_method", script: `new Vue({data:{gofriend_token:'x'},['mounted'](){}})`},
+		{name: "escaped_lifecycle_method", script: `new Vue({data:{gofriend_token:'x'},m\u006funted(){}})`},
+		{name: "escaped_quoted_lifecycle_method", script: `new Vue({data:{gofriend_token:'x'},'m\u006funted'(){}})`},
+		{name: "async_lifecycle_method", script: `new Vue({data:{gofriend_token:'x'},async mounted(){}})`},
+		{name: "generator_lifecycle_method", script: `new Vue({data:{gofriend_token:'x'},*mounted(){}})`},
+		{name: "data_unrelated_method", script: `new Vue({data:{gofriend_token:'x',mounted(){}}})`},
+		{name: "token_getter", script: `new Vue({data:{get gofriend_token(){return 'x'}}})`},
 		{name: "token_method", script: `new Vue({data:{gofriend_token(){return 'x'}}})`},
 		{name: "config_spread", script: `new Vue({...config,data:{gofriend_token:'x'}})`},
 		{name: "data_spread", script: `new Vue({data:{...values,gofriend_token:'x'}})`},
@@ -416,6 +424,14 @@ func TestExtractTokenAllowsUnrelatedOrdinaryIdentifiers(t *testing.T) {
 	token, err := extractToken(body)
 	if err != nil || token != "right-token" {
 		t.Fatalf("token=%q err=%v, want right-token", token, err)
+	}
+}
+
+func TestExtractTokenAllowsUnrelatedOrdinaryVueMethods(t *testing.T) {
+	body := []byte(`<script>new Vue({data:{gofriend_token:'fixture-token'}, mounted(){}})</script>`)
+	token, err := extractToken(body)
+	if err != nil || token != "fixture-token" {
+		t.Fatalf("token=%q err=%v, want fixture-token", token, err)
 	}
 }
 

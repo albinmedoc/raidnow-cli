@@ -134,7 +134,7 @@ func tokenFromVueExpression(expression *jsparser.NewExpr) (string, bool, error) 
 	if !ok {
 		return "", false, nil
 	}
-	dataValue, count, valid := directStaticProperty(config, "data")
+	dataValue, count, valid := directStaticConfigProperty(config, "data")
 	if !valid || count != 1 {
 		return "", false, nil
 	}
@@ -155,6 +155,49 @@ func tokenFromVueExpression(expression *jsparser.NewExpr) (string, bool, error) 
 		return "", false, errBootstrap
 	}
 	return token, true, nil
+}
+
+func directStaticConfigProperty(object *jsparser.ObjectExpr, wanted string) (jsparser.IExpr, int, bool) {
+	var value jsparser.IExpr
+	count := 0
+	for _, property := range object.List {
+		if property.Spread || property.Init != nil {
+			return nil, 0, false
+		}
+		if property.Name == nil {
+			method, ok := property.Value.(*jsparser.MethodDecl)
+			if !ok || !ordinaryNamedMethodUnrelatedTo(method, wanted) {
+				return nil, 0, false
+			}
+			continue
+		}
+		if property.Name.IsComputed() {
+			return nil, 0, false
+		}
+		if _, method := property.Value.(*jsparser.MethodDecl); method {
+			return nil, 0, false
+		}
+		name, ok := staticPropertyName(property.Name)
+		if !ok {
+			return nil, 0, false
+		}
+		if name == wanted {
+			count++
+			value = property.Value
+		}
+	}
+	return value, count, true
+}
+
+func ordinaryNamedMethodUnrelatedTo(method *jsparser.MethodDecl, wanted string) bool {
+	if method.Static || method.Async || method.Generator || method.Get || method.Set {
+		return false
+	}
+	if method.Name.Private != nil || method.Name.IsComputed() || bytes.ContainsRune(method.Name.Literal.Data, '\\') {
+		return false
+	}
+	name, ok := staticPropertyName(&method.Name.PropertyName)
+	return ok && name != wanted
 }
 
 func directStaticProperty(object *jsparser.ObjectExpr, wanted string) (jsparser.IExpr, int, bool) {
