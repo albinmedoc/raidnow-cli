@@ -9,20 +9,21 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"sync/atomic"
+	"time"
 )
 
 const browserUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 
 const maxResponseBytes = 1 << 20
 
-func (client *Client) postForm(ctx context.Context, operation string, values url.Values, policy OperationPolicy) (json.RawMessage, error) {
+func (client *Client) postForm(ctx context.Context, operation OperationDescriptor, values url.Values, timeout time.Duration) (json.RawMessage, error) {
 	if ctx.Err() != nil {
 		return nil, readNetworkFailure()
 	}
 	form := cloneValues(values)
-	form.Set("type", operation)
+	form.Set("type", operation.Name())
 
-	requestContext, cancel := context.WithTimeout(ctx, policy.Timeout)
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var dispatched atomic.Bool
 	requestContext = httptrace.WithClientTrace(requestContext, &httptrace.ClientTrace{
@@ -42,7 +43,7 @@ func (client *Client) postForm(ctx context.Context, operation string, values url
 
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return nil, transportFailure(policy.Kind, dispatched.Load())
+		return nil, transportFailure(operation.Kind(), dispatched.Load())
 	}
 	dispatched.Store(true)
 	defer response.Body.Close()
@@ -54,10 +55,10 @@ func (client *Client) postForm(ctx context.Context, operation string, values url
 		return nil, upstreamRejection()
 	}
 	if err != nil {
-		return nil, transportFailure(policy.Kind, dispatched.Load())
+		return nil, transportFailure(operation.Kind(), dispatched.Load())
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		if policy.AllowEmptyResponse {
+		if operation.AllowsEmptyResponse() {
 			return json.RawMessage{}, nil
 		}
 		return nil, upstreamRejection()

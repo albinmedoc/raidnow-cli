@@ -31,8 +31,8 @@ func TestPostFormDoesNotFollowRedirectOrRetry(t *testing.T) {
 	}))
 	defer source.Close()
 
-	client := mustClient(t, Config{Endpoint: source.URL, HTTPClient: source.Client()})
-	_, err := client.PostForm(context.Background(), "lookup", nil, validReadPolicy())
+	client := mustClient(t, Config{Endpoint: source.URL, HTTPClient: source.Client(), AllowInsecureHTTP: true})
+	_, err := client.PostForm(context.Background(), ParList, nil, CallOptions{})
 	assertExitCode(t, err, output.ExitUpstreamRejection)
 	assertNoSecret(t, err)
 	if got := sourceRequests.Load(); got != 1 {
@@ -63,23 +63,23 @@ func TestPostFormDisablesInjectedCookieJar(t *testing.T) {
 	jar.SetCookies(serverURL, []*http.Cookie{{Name: "session", Value: "secret-marker"}})
 	httpClient := server.Client()
 	httpClient.Jar = jar
-	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: httpClient})
+	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: httpClient, AllowInsecureHTTP: true})
 
-	if _, err := client.PostForm(context.Background(), "lookup", nil, validReadPolicy()); err != nil {
+	if _, err := client.PostForm(context.Background(), ParList, nil, CallOptions{}); err != nil {
 		t.Fatalf("post form: %v", err)
 	}
 }
 
 func TestCanceledWriteBeforeDispatchIsSafeReadNetworkFailure(t *testing.T) {
 	var requests atomic.Int32
-	client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		requests.Add(1)
-		return nil, errors.New("secret-marker")
-	})}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	client := mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return nil, errors.New("must not dispatch")
+	})}})
 
-	_, err := client.PostForm(ctx, "write_operation", nil, OperationPolicy{Kind: WriteOperation, Timeout: time.Second})
+	_, err := client.PostForm(ctx, LineMatchingCreate, nil, CallOptions{})
 	assertExitCode(t, err, output.ExitReadNetwork)
 	assertNoSecret(t, err)
 	if got := requests.Load(); got != 0 {
@@ -88,18 +88,10 @@ func TestCanceledWriteBeforeDispatchIsSafeReadNetworkFailure(t *testing.T) {
 }
 
 func TestCancellationAfterRoundTripEntryBeforeRequestWriteIsSafe(t *testing.T) {
-	testCases := []struct {
-		name string
-		kind OperationKind
-	}{
-		{name: "read", kind: ReadOperation},
-		{name: "write", kind: WriteOperation},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
+	for _, operation := range []Operation{ParList, LineMatchingCreate} {
+		t.Run(operationName(t, operation), func(t *testing.T) {
 			entered := make(chan struct{})
-			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				close(entered)
 				<-request.Context().Done()
 				return nil, errors.New("disconnect secret-marker")
@@ -107,68 +99,71 @@ func TestCancellationAfterRoundTripEntryBeforeRequestWriteIsSafe(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)
 			go func() {
-				_, err := client.PostForm(ctx, "operation", nil, OperationPolicy{Kind: testCase.kind, Timeout: time.Second})
+				_, err := client.PostForm(ctx, operation, nil, CallOptions{Timeout: time.Second})
 				done <- err
 			}()
 			<-entered
 			cancel()
-			err := <-done
-			assertExitCode(t, err, output.ExitReadNetwork)
-			assertNoSecret(t, err)
+			assertExitCode(t, <-done, output.ExitReadNetwork)
 		})
 	}
 }
 
-func TestCancellationAfterRequestWriteUsesOperationClassification(t *testing.T) {
+func TestRealTransportDisconnectAfterDispatchUsesRegisteredClassification(t *testing.T) {
 	testCases := []struct {
-		name string
-		kind OperationKind
-		want int
+		operation Operation
+		want      int
 	}{
-		{name: "read", kind: ReadOperation, want: output.ExitReadNetwork},
-		{name: "write", kind: WriteOperation, want: output.ExitWriteOutcomeUnknown},
+		{operation: ParList, want: output.ExitReadNetwork},
+		{operation: LineMatchingCreate, want: output.ExitWriteOutcomeUnknown},
 	}
-
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			started := make(chan struct{})
-			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				signalWroteRequest(request, nil)
-				close(started)
-				<-request.Context().Done()
-				return nil, request.Context().Err()
-			})}})
-			ctx, cancel := context.WithCancel(context.Background())
+		t.Run(operationName(t, testCase.operation), func(t *testing.T) {
+			dispatched := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				hijacker, ok := response.(http.Hijacker)
+				if !ok {
+					t.Error("response writer does not support hijacking")
+					return
+				}
+				connection, _, err := hijacker.Hijack()
+				if err != nil {
+					t.Errorf("hijack: %v", err)
+					return
+				}
+				close(dispatched)
+				_ = connection.Close()
+			}))
+			defer server.Close()
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+
 			done := make(chan error, 1)
 			go func() {
-				_, err := client.PostForm(ctx, "operation", nil, OperationPolicy{Kind: testCase.kind, Timeout: time.Second})
+				_, err := client.PostForm(context.Background(), testCase.operation, url.Values{"token": {"secret-marker"}}, CallOptions{})
 				done <- err
 			}()
-			<-started
-			cancel()
+			<-dispatched
 			assertExitCode(t, <-done, testCase.want)
 		})
 	}
 }
 
-func TestUnexpectedEOFAfterDispatchUsesOperationClassification(t *testing.T) {
+func TestUnexpectedEOFAfterDispatchUsesRegisteredClassification(t *testing.T) {
 	testCases := []struct {
-		name string
-		kind OperationKind
-		want int
+		operation Operation
+		want      int
 	}{
-		{name: "read", kind: ReadOperation, want: output.ExitReadNetwork},
-		{name: "write", kind: WriteOperation, want: output.ExitWriteOutcomeUnknown},
+		{operation: ParList, want: output.ExitReadNetwork},
+		{operation: LineMatchingCreate, want: output.ExitWriteOutcomeUnknown},
 	}
-
 	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
+		t.Run(operationName(t, testCase.operation), func(t *testing.T) {
 			body := &errorBody{err: io.ErrUnexpectedEOF}
-			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				signalWroteRequest(request, nil)
 				return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 			})}})
-			_, err := client.PostForm(context.Background(), "operation", nil, OperationPolicy{Kind: testCase.kind, Timeout: time.Second})
+			_, err := client.PostForm(context.Background(), testCase.operation, nil, CallOptions{Timeout: time.Second})
 			assertExitCode(t, err, testCase.want)
 			assertNoSecret(t, err)
 			if !body.closed.Load() {
@@ -180,12 +175,11 @@ func TestUnexpectedEOFAfterDispatchUsesOperationClassification(t *testing.T) {
 
 func TestResponseMarksWriteDispatchedWithoutTraceCallback(t *testing.T) {
 	body := &errorBody{err: io.ErrUnexpectedEOF}
-	client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		// Intentionally omit WroteRequest: receiving a response independently proves dispatch.
+	client := mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 	})}})
 
-	_, err := client.PostForm(context.Background(), "operation", nil, OperationPolicy{Kind: WriteOperation, Timeout: time.Second})
+	_, err := client.PostForm(context.Background(), LineMatchingCreate, nil, CallOptions{Timeout: time.Second})
 	assertExitCode(t, err, output.ExitWriteOutcomeUnknown)
 	assertNoSecret(t, err)
 	if !body.closed.Load() {
@@ -193,46 +187,16 @@ func TestResponseMarksWriteDispatchedWithoutTraceCallback(t *testing.T) {
 	}
 }
 
-func TestRequestWriteThenTransportErrorUsesOperationClassification(t *testing.T) {
-	testCases := []struct {
-		name string
-		kind OperationKind
-		err  error
-		want int
-	}{
-		{name: "read_eof", kind: ReadOperation, err: io.EOF, want: output.ExitReadNetwork},
-		{name: "read_timeout", kind: ReadOperation, err: context.DeadlineExceeded, want: output.ExitReadNetwork},
-		{name: "write_eof", kind: WriteOperation, err: io.EOF, want: output.ExitWriteOutcomeUnknown},
-		{name: "write_timeout", kind: WriteOperation, err: context.DeadlineExceeded, want: output.ExitWriteOutcomeUnknown},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				signalWroteRequest(request, nil)
-				return nil, testCase.err
-			})}})
-			_, err := client.PostForm(context.Background(), "operation", url.Values{"token": {"secret-marker"}}, OperationPolicy{Kind: testCase.kind, Timeout: time.Second})
-			assertExitCode(t, err, testCase.want)
-			assertNoSecret(t, err)
-		})
-	}
-}
-
 func TestOversizedResponseTakesPrecedenceOverFinalReadError(t *testing.T) {
-	for _, kind := range []OperationKind{ReadOperation, WriteOperation} {
-		name := "read"
-		if kind == WriteOperation {
-			name = "write"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, operation := range []Operation{ParList, LineMatchingCreate} {
+		t.Run(operationName(t, operation), func(t *testing.T) {
 			body := &bytesThenErrorBody{content: []byte(strings.Repeat("x", maxResponseBytes+1)), err: io.ErrUnexpectedEOF}
-			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			client := mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				signalWroteRequest(request, nil)
 				return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 			})}})
 
-			_, err := client.PostForm(context.Background(), "operation", url.Values{"token": {"secret-marker"}}, OperationPolicy{Kind: kind, Timeout: time.Second})
+			_, err := client.PostForm(context.Background(), operation, url.Values{"token": {"secret-marker"}}, CallOptions{Timeout: time.Second})
 			assertExitCode(t, err, output.ExitUpstreamRejection)
 			assertNoSecret(t, err)
 			if !body.closed.Load() {
@@ -244,18 +208,34 @@ func TestOversizedResponseTakesPrecedenceOverFinalReadError(t *testing.T) {
 
 func TestSlowResponseBodyHonorsPerCallTimeout(t *testing.T) {
 	body := &blockingBody{}
-	client := mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client := mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		signalWroteRequest(request, nil)
 		body.ctx = request.Context()
 		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
 	})}})
 
-	_, err := client.PostForm(context.Background(), "lookup", nil, OperationPolicy{Kind: ReadOperation, Timeout: 10 * time.Millisecond})
+	_, err := client.PostForm(context.Background(), ParList, nil, CallOptions{Timeout: 10 * time.Millisecond})
 	assertExitCode(t, err, output.ExitReadNetwork)
 	if !body.closed.Load() {
 		t.Fatal("response body was not closed")
 	}
 }
+
+func operationName(t *testing.T, operation Operation) string {
+	t.Helper()
+	descriptor, err := operation.Descriptor()
+	if err != nil {
+		t.Fatalf("operation descriptor: %v", err)
+	}
+	return descriptor.Name()
+}
+
+type traceAwareRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function traceAwareRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+func (traceAwareRoundTripFunc) upstreamTraceAware() {}
 
 type errorBody struct {
 	err    error

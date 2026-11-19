@@ -5,13 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"regexp"
 	"time"
 )
 
 const DefaultEndpoint = "https://pokemongo-get.com/wp-content/themes/simplicity2-child/include/gofriend_enraid_masta.php?v=2025121601"
-
-var operationNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
 type OperationKind uint8
 
@@ -20,15 +17,23 @@ const (
 	WriteOperation
 )
 
-type OperationPolicy struct {
-	Kind               OperationKind
-	Timeout            time.Duration
-	AllowEmptyResponse bool
+// CallOptions contains per-call settings that do not alter registered
+// operation safety metadata. A zero Timeout uses the operation default.
+type CallOptions struct {
+	Timeout time.Duration
 }
 
 type Config struct {
-	Endpoint   string
+	Endpoint string
+
+	// HTTPClient may use a nil/default transport or a standard *http.Transport.
+	// Other public RoundTripper implementations are rejected because they may
+	// not preserve httptrace.WroteRequest dispatch classification.
 	HTTPClient *http.Client
+
+	// AllowInsecureHTTP permits a cleartext endpoint only for explicit local
+	// test configurations. Production callers should leave it false.
+	AllowInsecureHTTP bool
 }
 
 type Client struct {
@@ -44,20 +49,31 @@ func (client *Client) GoString() string {
 	return "upstream.Client{}"
 }
 
+// NewClient constructs a stateless upstream client. Injected clients must use
+// the standard HTTP transport so write dispatch remains traceable.
 func NewClient(config Config) (*Client, error) {
 	endpoint := config.Endpoint
 	if endpoint == "" {
 		endpoint = DefaultEndpoint
 	}
 	parsedEndpoint, err := url.Parse(endpoint)
-	if err != nil || (parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https") || parsedEndpoint.Host == "" || parsedEndpoint.User != nil || parsedEndpoint.Fragment != "" {
+	if err != nil || parsedEndpoint.Host == "" || parsedEndpoint.User != nil || parsedEndpoint.Fragment != "" || parsedEndpoint.Opaque != "" {
+		return nil, invalidArguments("Ogiltig transportkonfiguration.")
+	}
+	if parsedEndpoint.Scheme != "https" && !(parsedEndpoint.Scheme == "http" && config.AllowInsecureHTTP) {
 		return nil, invalidArguments("Ogiltig transportkonfiguration.")
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = &http.Client{Transport: http.DefaultTransport}
+	}
+	if !supportedTransport(httpClient.Transport) {
+		return nil, invalidArguments("Ogiltig transportkonfiguration.")
 	}
 	clientCopy := *httpClient
+	if clientCopy.Transport == nil {
+		clientCopy.Transport = http.DefaultTransport
+	}
 	clientCopy.Jar = nil
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -65,18 +81,39 @@ func NewClient(config Config) (*Client, error) {
 	return &Client{endpoint: endpoint, httpClient: &clientCopy}, nil
 }
 
-func (client *Client) PostForm(ctx context.Context, operation string, values url.Values, policy OperationPolicy) (json.RawMessage, error) {
-	if ctx == nil || !operationNamePattern.MatchString(operation) {
+type traceAwareRoundTripper interface {
+	http.RoundTripper
+	upstreamTraceAware()
+}
+
+func supportedTransport(transport http.RoundTripper) bool {
+	if transport == nil {
+		return true
+	}
+	if standard, ok := transport.(*http.Transport); ok {
+		return standard != nil
+	}
+	_, ok := transport.(traceAwareRoundTripper)
+	return ok
+}
+
+func (client *Client) PostForm(ctx context.Context, operation Operation, values url.Values, options CallOptions) (json.RawMessage, error) {
+	if ctx == nil {
 		return nil, invalidArguments("Ogiltig upstream-operation.")
+	}
+	descriptor, err := operation.Descriptor()
+	if err != nil {
+		return nil, err
 	}
 	if _, supplied := values["type"]; supplied {
 		return nil, invalidArguments("Formuläret innehåller ett reserverat fält.")
 	}
-	if (policy.Kind != ReadOperation && policy.Kind != WriteOperation) || policy.Timeout <= 0 {
-		return nil, invalidArguments("Ogiltig operationspolicy.")
+	timeout := options.Timeout
+	if timeout == 0 {
+		timeout = descriptor.DefaultTimeout()
 	}
-	if policy.AllowEmptyResponse && operation != "user_info_post" {
-		return nil, invalidArguments("Tomt svar är inte tillåtet för operationen.")
+	if timeout <= 0 {
+		return nil, invalidArguments("Ogiltig timeout.")
 	}
-	return client.postForm(ctx, operation, values, policy)
+	return client.postForm(ctx, descriptor, values, timeout)
 }

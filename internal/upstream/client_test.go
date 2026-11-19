@@ -31,8 +31,9 @@ func TestPostFormSendsStatelessBrowserLikeRequest(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewClient(Config{
-		Endpoint:   server.URL + "/form?existing=1",
-		HTTPClient: server.Client(),
+		Endpoint:          server.URL + "/form?existing=1",
+		HTTPClient:        server.Client(),
+		AllowInsecureHTTP: true,
 	})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
@@ -42,10 +43,7 @@ func TestPostFormSendsStatelessBrowserLikeRequest(t *testing.T) {
 		"field[]": {"first", "second"},
 		"token":   {"secret-marker"},
 	}
-	result, err := client.PostForm(context.Background(), "lookup_operation", values, OperationPolicy{
-		Kind:    ReadOperation,
-		Timeout: time.Second,
-	})
+	result, err := client.PostForm(context.Background(), LineMatchingGetList, values, CallOptions{Timeout: time.Second})
 	if err != nil {
 		t.Fatalf("post form: %v", err)
 	}
@@ -76,7 +74,7 @@ func TestPostFormSendsStatelessBrowserLikeRequest(t *testing.T) {
 	if got := gotRequest.Header.Get("User-Agent"); !strings.HasPrefix(got, "Mozilla/") {
 		t.Fatalf("User-Agent = %q, want browser-like value", got)
 	}
-	if gotBody != "field%5B%5D=first&field%5B%5D=second&token=secret-marker&type=lookup_operation" {
+	if gotBody != "field%5B%5D=first&field%5B%5D=second&token=secret-marker&type=line_matching_get_list" {
 		t.Fatalf("body = %q", gotBody)
 	}
 	if gotRequest.Header.Get("Cookie") != "" {
@@ -90,7 +88,7 @@ func TestPostFormSendsStatelessBrowserLikeRequest(t *testing.T) {
 	}
 }
 
-func TestDefaultEndpointIsPinned(t *testing.T) {
+func TestDefaultEndpointIsPinnedHTTPS(t *testing.T) {
 	const want = "https://pokemongo-get.com/wp-content/themes/simplicity2-child/include/gofriend_enraid_masta.php?v=2025121601"
 	if DefaultEndpoint != want {
 		t.Fatalf("default endpoint = %q, want %q", DefaultEndpoint, want)
@@ -99,33 +97,24 @@ func TestDefaultEndpointIsPinned(t *testing.T) {
 
 func TestPostFormRejectsInvalidLocalArgumentsBeforeDispatch(t *testing.T) {
 	var requests atomic.Int32
-	client, err := NewClient(Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		requests.Add(1)
 		return nil, fmt.Errorf("must not dispatch")
 	})}})
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
 	testCases := []struct {
-		name      string
-		operation string
-		values    url.Values
-		policy    OperationPolicy
+		name    string
+		ctx     context.Context
+		values  url.Values
+		options CallOptions
 	}{
-		{name: "blank operation", operation: " ", policy: validReadPolicy()},
-		{name: "invalid operation", operation: "bad operation", policy: validReadPolicy()},
-		{name: "caller type", operation: "lookup", values: url.Values{"type": {"override"}}, policy: validReadPolicy()},
-		{name: "missing kind", operation: "lookup", policy: OperationPolicy{Timeout: time.Second}},
-		{name: "invalid kind", operation: "lookup", policy: OperationPolicy{Kind: OperationKind(99), Timeout: time.Second}},
-		{name: "missing timeout", operation: "lookup", policy: OperationPolicy{Kind: ReadOperation}},
-		{name: "negative timeout", operation: "lookup", policy: OperationPolicy{Kind: ReadOperation, Timeout: -time.Second}},
-		{name: "empty option wrong operation", operation: "lookup", policy: OperationPolicy{Kind: ReadOperation, Timeout: time.Second, AllowEmptyResponse: true}},
+		{name: "nil context"},
+		{name: "caller type", ctx: context.Background(), values: url.Values{"type": {"override"}}},
+		{name: "negative timeout", ctx: context.Background(), options: CallOptions{Timeout: -time.Second}},
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, callErr := client.PostForm(context.Background(), testCase.operation, testCase.values, testCase.policy)
+			_, callErr := client.PostForm(testCase.ctx, LineMatchingGetList, testCase.values, testCase.options)
 			if got := output.ExitCodeFor(callErr); got != output.ExitInvalidArguments {
 				t.Fatalf("exit code = %d, want %d; error=%v", got, output.ExitInvalidArguments, callErr)
 			}
@@ -139,27 +128,67 @@ func TestPostFormRejectsInvalidLocalArgumentsBeforeDispatch(t *testing.T) {
 	}
 }
 
-func TestNewClientRejectsInvalidEndpoint(t *testing.T) {
-	testCases := []string{"http://", "ftp://example.com/form", "https://user:secret@example.com/form", "https://example.com/form#fragment"}
-	for _, endpoint := range testCases {
-		t.Run(endpoint, func(t *testing.T) {
-			_, err := NewClient(Config{Endpoint: endpoint})
+func TestNewClientValidatesEndpointSafety(t *testing.T) {
+	testCases := []struct {
+		name      string
+		endpoint  string
+		allowHTTP bool
+	}{
+		{name: "empty host", endpoint: "https://"},
+		{name: "malformed", endpoint: "https://example.com/%zz"},
+		{name: "unsupported scheme", endpoint: "ftp://example.com/form"},
+		{name: "userinfo", endpoint: "https://user:secret@example.com/form"},
+		{name: "fragment", endpoint: "https://example.com/form#fragment"},
+		{name: "relative", endpoint: "/form"},
+		{name: "http without opt in", endpoint: "http://example.com/form?token=secret-marker"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := NewClient(Config{Endpoint: testCase.endpoint, AllowInsecureHTTP: testCase.allowHTTP})
 			if got := output.ExitCodeFor(err); got != output.ExitInvalidArguments {
 				t.Fatalf("exit code = %d, want %d; error=%v", got, output.ExitInvalidArguments, err)
 			}
-			if strings.Contains(fmt.Sprintf("%v %#v", err, err), endpoint) || strings.Contains(fmt.Sprintf("%v %#v", err, err), "secret") {
-				t.Fatalf("error formatting leaked endpoint: %v %#v", err, err)
+			formatted := fmt.Sprintf("%v %#v", err, err)
+			if strings.Contains(formatted, testCase.endpoint) || strings.Contains(formatted, "secret") {
+				t.Fatalf("error formatting leaked endpoint: %s", formatted)
 			}
 		})
 	}
 }
 
-func validReadPolicy() OperationPolicy {
-	return OperationPolicy{Kind: ReadOperation, Timeout: time.Second}
+func TestNewClientAllowsHTTPOnlyWithExplicitOptIn(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if _, err := client.PostForm(context.Background(), ParList, nil, CallOptions{}); err != nil {
+		t.Fatalf("post form: %v", err)
+	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+func TestNewClientRejectsArbitraryCustomRoundTripper(t *testing.T) {
+	_, err := NewClient(Config{HTTPClient: &http.Client{Transport: arbitraryRoundTripper{}}})
+	if got := output.ExitCodeFor(err); got != output.ExitInvalidArguments {
+		t.Fatalf("exit code = %d, want %d; error=%v", got, output.ExitInvalidArguments, err)
+	}
+	assertNoSecret(t, err)
+}
 
-func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return function(request)
+func TestNewClientRejectsTypedNilStandardTransport(t *testing.T) {
+	var transport *http.Transport
+	_, err := NewClient(Config{HTTPClient: &http.Client{Transport: transport}})
+	if got := output.ExitCodeFor(err); got != output.ExitInvalidArguments {
+		t.Fatalf("exit code = %d, want %d; error=%v", got, output.ExitInvalidArguments, err)
+	}
+}
+
+type arbitraryRoundTripper struct{}
+
+func (arbitraryRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("secret-marker")
 }

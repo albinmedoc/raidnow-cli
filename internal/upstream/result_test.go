@@ -14,25 +14,24 @@ import (
 	"github.com/albinmedoc/raidnow-cli/internal/output"
 )
 
-func TestPostFormValidatesJSONResponse(t *testing.T) {
+func TestPostFormEmptyResponsePolicyComesFromRegistry(t *testing.T) {
 	testCases := []struct {
 		name      string
-		operation string
+		operation Operation
 		body      string
-		policy    OperationPolicy
 		wantExit  int
 	}{
-		{name: "empty", operation: "lookup", body: "", policy: validReadPolicy(), wantExit: output.ExitUpstreamRejection},
-		{name: "whitespace", operation: "lookup", body: " \n\t", policy: validReadPolicy(), wantExit: output.ExitUpstreamRejection},
-		{name: "malformed", operation: "lookup", body: `{"secret-marker":`, policy: validReadPolicy(), wantExit: output.ExitUpstreamRejection},
-		{name: "empty allowed user info", operation: "user_info_post", body: "", policy: OperationPolicy{Kind: WriteOperation, Timeout: time.Second, AllowEmptyResponse: true}},
+		{name: "empty rejected", operation: ParList, body: "", wantExit: output.ExitUpstreamRejection},
+		{name: "whitespace rejected", operation: ParList, body: " \n\t", wantExit: output.ExitUpstreamRejection},
+		{name: "malformed rejected", operation: ParList, body: `{"secret-marker":`, wantExit: output.ExitUpstreamRejection},
+		{name: "empty allowed only for user info", operation: UserInfoPost, body: ""},
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := &trackingReadCloser{Reader: strings.NewReader(testCase.body)}
 			client := responseClient(t, http.StatusOK, body)
-			result, err := client.PostForm(context.Background(), testCase.operation, nil, testCase.policy)
+			result, err := client.PostForm(context.Background(), testCase.operation, nil, CallOptions{})
 			if testCase.wantExit != 0 {
 				assertExitCode(t, err, testCase.wantExit)
 				assertNoSecret(t, err)
@@ -56,7 +55,7 @@ func TestPostFormReturnsExactValidJSONInDefensiveCopy(t *testing.T) {
 	body := &mutableBody{payload: payload}
 	client := responseClient(t, http.StatusOK, body)
 
-	result, err := client.PostForm(context.Background(), "lookup", nil, validReadPolicy())
+	result, err := client.PostForm(context.Background(), ParList, nil, CallOptions{})
 	if err != nil {
 		t.Fatalf("post form: %v", err)
 	}
@@ -84,7 +83,7 @@ func TestPostFormRejectsResponseOverOneMiB(t *testing.T) {
 	body := &trackingReadCloser{Reader: bytes.NewReader(payload)}
 	client := responseClient(t, http.StatusOK, body)
 
-	_, err := client.PostForm(context.Background(), "lookup", nil, validReadPolicy())
+	_, err := client.PostForm(context.Background(), ParList, nil, CallOptions{})
 	assertExitCode(t, err, output.ExitUpstreamRejection)
 	assertNoSecret(t, err)
 	if !body.closed.Load() {
@@ -97,7 +96,7 @@ func TestPostFormClosesBodyForEveryHTTPStatus(t *testing.T) {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			body := &trackingReadCloser{Reader: strings.NewReader(`{"ok":true,"secret":"secret-marker"}`)}
 			client := responseClient(t, status, body)
-			_, err := client.PostForm(context.Background(), "lookup", nil, validReadPolicy())
+			_, err := client.PostForm(context.Background(), ParList, nil, CallOptions{Timeout: time.Second})
 			if status == http.StatusOK {
 				if err != nil {
 					t.Fatalf("post form: %v", err)
@@ -115,7 +114,7 @@ func TestPostFormClosesBodyForEveryHTTPStatus(t *testing.T) {
 
 func responseClient(t *testing.T, status int, body io.ReadCloser) *Client {
 	t.Helper()
-	return mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	return mustClient(t, Config{HTTPClient: &http.Client{Transport: traceAwareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		signalWroteRequest(request, nil)
 		return &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}, nil
 	})}})

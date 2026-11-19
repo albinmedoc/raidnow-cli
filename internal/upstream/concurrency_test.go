@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestClientFormattingDoesNotExposeEndpointQuery(t *testing.T) {
@@ -39,8 +38,8 @@ func TestConcurrentCallsKeepRequestStateIsolated(t *testing.T) {
 			return
 		}
 		id := values.Get("id")
-		if values.Get("type") != "operation_"+id {
-			t.Errorf("type = %q, want operation_%s", values.Get("type"), id)
+		if values.Get("type") != "line_matching_get_list" {
+			t.Errorf("type = %q, want line_matching_get_list", values.Get("type"))
 		}
 		if got := values["field[]"]; len(got) != 2 || got[0] != "first_"+id || got[1] != "second_"+id {
 			t.Errorf("field values = %#v for id %s", got, id)
@@ -48,7 +47,7 @@ func TestConcurrentCallsKeepRequestStateIsolated(t *testing.T) {
 		_, _ = fmt.Fprintf(response, `{"id":%q}`, id)
 	}))
 	defer server.Close()
-	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client()})
+	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
 
 	var wait sync.WaitGroup
 	errorsChannel := make(chan error, callCount)
@@ -58,7 +57,7 @@ func TestConcurrentCallsKeepRequestStateIsolated(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			values := url.Values{"id": {id}, "field[]": {"first_" + id, "second_" + id}}
-			result, err := client.PostForm(context.Background(), "operation_"+id, values, OperationPolicy{Kind: ReadOperation, Timeout: time.Second})
+			result, err := client.PostForm(context.Background(), LineMatchingGetList, values, CallOptions{})
 			if err != nil {
 				errorsChannel <- err
 				return
