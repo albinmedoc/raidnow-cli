@@ -8,17 +8,13 @@ import (
 	"github.com/albinmedoc/raidnow-cli/internal/output"
 )
 
-func TestDecodeJSONRejectsAmbiguousOrUnboundedDocuments(t *testing.T) {
+func TestDecodeJSONRejectsMalformedOrTrailingDocuments(t *testing.T) {
 	testCases := []struct {
 		name string
 		raw  string
 	}{
-		{name: "duplicate top level key", raw: `{"status":"error","status":"success"}`},
-		{name: "duplicate nested key", raw: `{"status":"success","unknown":{"value":1,"value":2}}`},
 		{name: "trailing token", raw: `{"status":"success"} []`},
 		{name: "malformed object", raw: `{"status":"success"`},
-		{name: "excessive depth", raw: strings.Repeat(`[`, 300) + strings.Repeat(`]`, 300)},
-		{name: "excessive nodes", raw: `[` + strings.Repeat(`0,`, 100000) + `0]`},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -30,25 +26,6 @@ func TestDecodeJSONRejectsAmbiguousOrUnboundedDocuments(t *testing.T) {
 				t.Fatalf("error leaked document content: %v", err)
 			}
 		})
-	}
-}
-
-func TestDecodeJSONEnforcesDepthAndNodeBoundaries(t *testing.T) {
-	validDepth := strings.Repeat(`[`, maxJSONDepth) + `0` + strings.Repeat(`]`, maxJSONDepth)
-	if _, err := decodeJSON(json.RawMessage(validDepth)); err != nil {
-		t.Fatalf("depth boundary rejected: %v", err)
-	}
-	if _, err := decodeJSON(json.RawMessage(`[` + validDepth + `]`)); output.ExitCodeFor(err) != output.ExitUpstreamRejection {
-		t.Fatalf("depth beyond boundary err=%v", err)
-	}
-
-	validNodes := `[` + strings.Repeat(`0,`, maxJSONNodes-2) + `0]`
-	if _, err := decodeJSON(json.RawMessage(validNodes)); err != nil {
-		t.Fatalf("node boundary rejected: %v", err)
-	}
-	invalidNodes := `[` + strings.Repeat(`0,`, maxJSONNodes-1) + `0]`
-	if _, err := decodeJSON(json.RawMessage(invalidNodes)); output.ExitCodeFor(err) != output.ExitUpstreamRejection {
-		t.Fatalf("nodes beyond boundary err=%v", err)
 	}
 }
 

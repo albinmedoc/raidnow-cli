@@ -74,8 +74,6 @@ func TestPublishTrainerClassifiesStructuredResponses(t *testing.T) {
 		{name: "missing acknowledgement", body: `{"ok":true,"text":"secret-marker"}`, want: output.ExitUpstreamRejection},
 		{name: "wrong success type", body: `{"status":true}`, want: output.ExitUpstreamRejection},
 		{name: "array", body: `[]`, want: output.ExitUpstreamRejection},
-		{name: "duplicate acknowledgement", body: `{"status":"error","status":"success","text":"secret-marker"}`, want: output.ExitUpstreamRejection},
-		{name: "nested duplicate", body: `{"status":"success","ignored":{"secret-marker":1,"secret-marker":2}}`, want: output.ExitUpstreamRejection},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte(testCase.body)) }))

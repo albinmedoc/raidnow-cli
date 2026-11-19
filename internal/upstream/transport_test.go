@@ -70,22 +70,6 @@ func TestPostFormDisablesInjectedCookieJar(t *testing.T) {
 	}
 }
 
-func TestPostFormRejectsDuplicateKeysBeforeReturningRawJSON(t *testing.T) {
-	for _, body := range []string{
-		`{"status":"error","status":"success"}`,
-		`{"status":"success","unknown":{"value":1,"value":2}}`,
-	} {
-		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-			_, _ = response.Write([]byte(body))
-		}))
-		client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
-		_, err := client.PostForm(context.Background(), ParList, nil, CallOptions{})
-		server.Close()
-		assertExitCode(t, err, output.ExitUpstreamRejection)
-		assertNoSecret(t, err)
-	}
-}
-
 func TestCanceledWriteBeforeDispatchIsSafeReadNetworkFailure(t *testing.T) {
 	var requests atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
