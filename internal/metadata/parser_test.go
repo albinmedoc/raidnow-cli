@@ -143,6 +143,80 @@ func TestParseNormalizesNullMissingAndBlankFields(t *testing.T) {
 	}
 }
 
+func TestParseRejectsBlankCatalogIDsAndPreservesNonblankIDs(t *testing.T) {
+	for _, id := range []string{"   ", `\u00A0`} {
+		t.Run(fmt.Sprintf("blank_%q", id), func(t *testing.T) {
+			assertRejected(t, []byte(`<script>var aryPokemon={"`+id+`":{}};</script>`))
+		})
+	}
+
+	const exactID = "  exact-id\u00A0 "
+	catalog, err := Parse([]byte(`<script>var aryPokemon={"` + exactID + `":{}};</script>`))
+	if err != nil {
+		t.Fatalf("Parse nonblank ID: %v", err)
+	}
+	decodedID := "  exact-id\u00A0 "
+	if _, ok := catalog.Lookup(decodedID); !ok {
+		t.Fatalf("Lookup(%q) = false, want exact untrimmed ID", decodedID)
+	}
+	entry := catalog.List()[0]
+	if entry.ID() != decodedID {
+		t.Fatalf("ID() = %q, want exact %q", entry.ID(), decodedID)
+	}
+}
+
+func TestParseRejectsUnpairedSurrogateEscapesEverywhere(t *testing.T) {
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{name: "lone_high_id", body: `<script>var aryPokemon={"bad\uD83D":{}};</script>`},
+		{name: "lone_low_name", body: `<script>var aryPokemon={"id":{"en":"bad\uDE00"}};</script>`},
+		{name: "reversed_image", body: `<script>var aryPokemon={"id":{"image":"bad\uDE00\uD83D"}};</script>`},
+		{name: "high_followed_by_non_low", body: `<script>var aryPokemon={"id":{"extra":{"value":"bad\uD83D\u0041"}}};</script>`},
+		{name: "high_followed_by_high", body: `<script>var aryPokemon={"id":{"extra":{"value":"bad\uD83D\uD83D"}}};</script>`},
+		{name: "nested_unknown_key", body: `<script>var aryPokemon={"id":{"extra":{"bad\uD83D":true}}};</script>`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assertRejected(t, []byte(testCase.body))
+		})
+	}
+}
+
+func TestParseAcceptsValidSurrogatePairsEverywhere(t *testing.T) {
+	catalog, err := Parse([]byte(`<script>var aryPokemon={"id\uD83D\uDE00":{"en":"name\uD83D\uDE00","image":"image\uD83D\uDE00","extra":{"key\uD83D\uDE00":"value\uD83D\uDE00"}}};</script>`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	entry, ok := catalog.Lookup("id😀")
+	if !ok {
+		t.Fatal("Lookup decoded supplementary-plane ID = false, want true")
+	}
+	if entry.Name() != "name😀" || entry.ImageURL() != "image😀" {
+		t.Fatalf("decoded fields = (%q, %q), want supplementary-plane rune", entry.Name(), entry.ImageURL())
+	}
+}
+
+func TestParseRejectsUnsafeUnicodeInEveryJSONKeyAndString(t *testing.T) {
+	testCases := []struct {
+		name string
+		body string
+	}{
+		{name: "nested_control_key", body: `<script>var aryPokemon={"id":{"extra":{"bad\u0000key":true}}};</script>`},
+		{name: "nested_control_value", body: `<script>var aryPokemon={"id":{"extra":{"value":"bad\u0085value"}}};</script>`},
+		{name: "nested_format_key", body: `<script>var aryPokemon={"id":{"extra":{"bad\u2060key":true}}};</script>`},
+		{name: "nested_format_value", body: `<script>var aryPokemon={"id":{"extra":["bad\u200Dvalue"]}};</script>`},
+		{name: "nested_line_separator", body: `<script>var aryPokemon={"id":{"extra":{"value":"bad\u2028value"}}};</script>`},
+		{name: "nested_paragraph_separator", body: `<script>var aryPokemon={"id":{"extra":{"value":"bad\u2029value"}}};</script>`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assertRejected(t, []byte(testCase.body))
+		})
+	}
+}
+
 func TestParseRejectsDuplicateKeysAtEveryNestingLevel(t *testing.T) {
 	for _, body := range []string{
 		`<script>var aryPokemon={"same":{},"same":{}};</script>`,

@@ -67,7 +67,7 @@ func Parse(body []byte) (catalog Catalog, err error) {
 	}
 	entries := make(map[string]Entry, len(raw))
 	for id, value := range raw {
-		if len(id) == 0 || len(id) > MaxIDBytes || !safeText(id) {
+		if len(id) == 0 || len(id) > MaxIDBytes || strings.TrimSpace(id) == "" || !safeText(id) {
 			return Catalog{}, ErrInvalidMetadata
 		}
 		trimmed := bytes.TrimSpace(value)
@@ -119,64 +119,239 @@ func safeText(value string) bool {
 }
 
 func validateJSON(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := validateJSONValue(decoder, 1); err != nil {
+	parser := strictJSONParser{data: data}
+	if err := parser.parseValue(1); err != nil {
 		return err
 	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+	parser.skipWhitespace()
+	if parser.position != len(parser.data) {
 		return ErrInvalidMetadata
 	}
 	return nil
 }
 
-func validateJSONValue(decoder *json.Decoder, depth int) error {
+type strictJSONParser struct {
+	data     []byte
+	position int
+}
+
+func (parser *strictJSONParser) parseValue(depth int) error {
 	if depth > MaxJSONDepth {
 		return ErrInvalidMetadata
 	}
-	token, err := decoder.Token()
-	if err != nil {
+	parser.skipWhitespace()
+	if parser.position >= len(parser.data) {
 		return ErrInvalidMetadata
 	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
+	switch parser.data[parser.position] {
+	case '{':
+		return parser.parseObject(depth)
+	case '[':
+		return parser.parseArray(depth)
+	case '"':
+		_, err := parser.parseString()
+		return err
+	case 't':
+		return parser.consumeLiteral("true")
+	case 'f':
+		return parser.consumeLiteral("false")
+	case 'n':
+		return parser.consumeLiteral("null")
+	default:
+		return parser.parseNumber()
+	}
+}
+
+func (parser *strictJSONParser) parseObject(depth int) error {
+	parser.position++
+	parser.skipWhitespace()
+	if parser.consumeByte('}') {
 		return nil
 	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			key, ok := keyToken.(string)
-			if err != nil || !ok {
-				return ErrInvalidMetadata
-			}
-			if _, duplicate := seen[key]; duplicate {
-				return ErrInvalidMetadata
-			}
-			seen[key] = struct{}{}
-			if err := validateJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
+	seen := make(map[string]struct{})
+	for {
+		key, err := parser.parseString()
+		if err != nil {
+			return err
 		}
-		closing, err := decoder.Token()
-		if err != nil || closing != json.Delim('}') {
+		if _, duplicate := seen[key]; duplicate {
 			return ErrInvalidMetadata
 		}
-	case '[':
-		for decoder.More() {
-			if err := validateJSONValue(decoder, depth+1); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil || closing != json.Delim(']') {
+		seen[key] = struct{}{}
+		parser.skipWhitespace()
+		if !parser.consumeByte(':') {
 			return ErrInvalidMetadata
 		}
-	default:
+		if err := parser.parseValue(depth + 1); err != nil {
+			return err
+		}
+		parser.skipWhitespace()
+		if parser.consumeByte('}') {
+			return nil
+		}
+		if !parser.consumeByte(',') {
+			return ErrInvalidMetadata
+		}
+		parser.skipWhitespace()
+	}
+}
+
+func (parser *strictJSONParser) parseArray(depth int) error {
+	parser.position++
+	parser.skipWhitespace()
+	if parser.consumeByte(']') {
+		return nil
+	}
+	for {
+		if err := parser.parseValue(depth + 1); err != nil {
+			return err
+		}
+		parser.skipWhitespace()
+		if parser.consumeByte(']') {
+			return nil
+		}
+		if !parser.consumeByte(',') {
+			return ErrInvalidMetadata
+		}
+	}
+}
+
+func (parser *strictJSONParser) parseString() (string, error) {
+	parser.skipWhitespace()
+	if !parser.consumeByte('"') {
+		return "", ErrInvalidMetadata
+	}
+	start := parser.position - 1
+	for parser.position < len(parser.data) {
+		value := parser.data[parser.position]
+		parser.position++
+		switch value {
+		case '"':
+			var decoded string
+			if err := json.Unmarshal(parser.data[start:parser.position], &decoded); err != nil || !safeText(decoded) {
+				return "", ErrInvalidMetadata
+			}
+			return decoded, nil
+		case '\\':
+			if parser.position >= len(parser.data) {
+				return "", ErrInvalidMetadata
+			}
+			escape := parser.data[parser.position]
+			parser.position++
+			if escape != 'u' {
+				if !strings.ContainsRune(`"\\/bfnrt`, rune(escape)) {
+					return "", ErrInvalidMetadata
+				}
+				continue
+			}
+			codeUnit, ok := parser.consumeHexCodeUnit()
+			if !ok || codeUnit >= 0xDC00 && codeUnit <= 0xDFFF {
+				return "", ErrInvalidMetadata
+			}
+			if codeUnit >= 0xD800 && codeUnit <= 0xDBFF {
+				if parser.position+2 > len(parser.data) || parser.data[parser.position] != '\\' || parser.data[parser.position+1] != 'u' {
+					return "", ErrInvalidMetadata
+				}
+				parser.position += 2
+				low, ok := parser.consumeHexCodeUnit()
+				if !ok || low < 0xDC00 || low > 0xDFFF {
+					return "", ErrInvalidMetadata
+				}
+			}
+		default:
+			if value < 0x20 {
+				return "", ErrInvalidMetadata
+			}
+		}
+	}
+	return "", ErrInvalidMetadata
+}
+
+func (parser *strictJSONParser) consumeHexCodeUnit() (uint16, bool) {
+	if parser.position+4 > len(parser.data) {
+		return 0, false
+	}
+	var value uint16
+	for range 4 {
+		value <<= 4
+		character := parser.data[parser.position]
+		parser.position++
+		switch {
+		case character >= '0' && character <= '9':
+			value += uint16(character - '0')
+		case character >= 'a' && character <= 'f':
+			value += uint16(character-'a') + 10
+		case character >= 'A' && character <= 'F':
+			value += uint16(character-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
+}
+
+func (parser *strictJSONParser) parseNumber() error {
+	start := parser.position
+	parser.consumeByte('-')
+	if parser.consumeByte('0') {
+		if parser.position < len(parser.data) && parser.data[parser.position] >= '0' && parser.data[parser.position] <= '9' {
+			return ErrInvalidMetadata
+		}
+	} else if !parser.consumeDigits('1', '9') {
+		return ErrInvalidMetadata
+	}
+	if parser.consumeByte('.') && !parser.consumeDigits('0', '9') {
+		return ErrInvalidMetadata
+	}
+	if parser.position < len(parser.data) && (parser.data[parser.position] == 'e' || parser.data[parser.position] == 'E') {
+		parser.position++
+		if parser.position < len(parser.data) && (parser.data[parser.position] == '+' || parser.data[parser.position] == '-') {
+			parser.position++
+		}
+		if !parser.consumeDigits('0', '9') {
+			return ErrInvalidMetadata
+		}
+	}
+	if parser.position == start {
 		return ErrInvalidMetadata
 	}
 	return nil
+}
+
+func (parser *strictJSONParser) consumeDigits(first, last byte) bool {
+	start := parser.position
+	for parser.position < len(parser.data) && parser.data[parser.position] >= first && parser.data[parser.position] <= last {
+		parser.position++
+		first = '0'
+	}
+	return parser.position > start
+}
+
+func (parser *strictJSONParser) consumeLiteral(literal string) error {
+	if !bytes.HasPrefix(parser.data[parser.position:], []byte(literal)) {
+		return ErrInvalidMetadata
+	}
+	parser.position += len(literal)
+	return nil
+}
+
+func (parser *strictJSONParser) consumeByte(value byte) bool {
+	if parser.position >= len(parser.data) || parser.data[parser.position] != value {
+		return false
+	}
+	parser.position++
+	return true
+}
+
+func (parser *strictJSONParser) skipWhitespace() {
+	for parser.position < len(parser.data) {
+		switch parser.data[parser.position] {
+		case ' ', '	', '\n', '\r':
+			parser.position++
+		default:
+			return
+		}
+	}
 }
 
 func topLevelAryPokemonObjects(ast *jsparser.AST) []*jsparser.ObjectExpr {
