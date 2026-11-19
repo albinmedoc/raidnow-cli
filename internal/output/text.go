@@ -12,32 +12,10 @@ const redacted = "[REDACTED]"
 
 var trainerCodePattern = regexp.MustCompile(`[0-9]{12}|[0-9]{4}([ -][0-9]{4}){2}`)
 
-type HumanRenderer struct {
-	destination io.Writer
-	secrets     []string
-}
-
-func NewHumanRenderer(destination io.Writer, secrets ...string) *HumanRenderer {
-	return &HumanRenderer{
-		destination: destination,
-		secrets:     append([]string(nil), secrets...),
-	}
-}
-
-func (renderer *HumanRenderer) Info(message string) error {
-	_, err := fmt.Fprintf(renderer.destination, "Info: %s\n", Redact(message, renderer.secrets...))
-	return err
-}
-
-func (renderer *HumanRenderer) Success(message string) error {
-	_, err := fmt.Fprintf(renderer.destination, "Klart: %s\n", Redact(message, renderer.secrets...))
-	return err
-}
-
-func (renderer *HumanRenderer) Error(err error) error {
+func RenderError(destination io.Writer, err error, secrets ...string) error {
 	publicError := PublicError(err)
-	message := Redact(publicError.Message, renderer.secrets...)
-	_, writeError := fmt.Fprintf(renderer.destination, "Fel [%s]: %s\n", publicError.Code, message)
+	message := Redact(publicError.Message, secrets...)
+	_, writeError := fmt.Fprintf(destination, "Fel [%s]: %s\n", publicError.Code, message)
 	return writeError
 }
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
 	"github.com/albinmedoc/raidnow-cli/internal/output"
@@ -17,46 +17,46 @@ type TrainerPublisher interface {
 	PublishTrainer(context.Context, string, domain.Trainer, upstream.CallOptions) error
 }
 
-func newTrainerCommand(publisher TrainerPublisher, config *RootConfig, jsonOutput *bool) *cobra.Command {
+func newTrainerCommand(publisher TrainerPublisher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
 	command := &cobra.Command{Use: "trainer", Short: "Manage invocation-scoped trainer information", Args: usageNoArgs}
-	command.RunE = withInvocationReset(func(command *cobra.Command, _ []string) error {
+	command.RunE = func(command *cobra.Command, _ []string) error {
 		return command.Help()
-	})
+	}
 	publish := &cobra.Command{
 		Use:   "publish",
 		Short: "Publish trainer information for this anonymous session",
 		Args:  usageNoArgs,
 	}
-	trainerInput := BindTrainerInputFlags(publish)
-	publish.RunE = withInvocationReset(func(command *cobra.Command, _ []string) error {
-		if config == nil || config.RequestTimeout < 0 {
+	trainerInput := bindTrainerInputFlags(publish)
+	publish.RunE = func(command *cobra.Command, _ []string) error {
+		if requestTimeout == nil || *requestTimeout < 0 || tokenFile == nil {
 			return newUsageError()
 		}
-		if config.TokenFile == "-" && trainerInput.codeFile == "-" {
+		if *tokenFile == "-" && trainerInput.codeFile == "-" {
 			return newUsageError()
 		}
-		if isNilInterface(publisher) {
-			return &CommandError{Command: "trainer publish", Err: errors.New("trainer publisher unavailable")}
+		if publisher == nil {
+			return errors.New("trainer publisher unavailable")
 		}
-		token, err := session.ReadTokenInput(config.TokenFile, command.InOrStdin())
+		token, err := session.ReadTokenInput(*tokenFile, command.InOrStdin())
 		if err != nil {
-			return &CommandError{Command: "trainer publish", Err: output.NewError(output.CodeInvalidInput, "Ogiltig tokeninmatning.")}
+			return output.NewError(output.CodeInvalidInput, "Ogiltig tokeninmatning.")
 		}
-		trainer, err := trainerInput.Read(command)
+		trainer, err := trainerInput.read(command)
 		if err != nil {
-			return &CommandError{Command: "trainer publish", Err: err}
+			return err
 		}
-		if err := publisher.PublishTrainer(command.Context(), token, trainer, upstream.CallOptions{Timeout: config.RequestTimeout}); err != nil {
-			return &CommandError{Command: "trainer publish", Err: sanitizedPublisherError(err)}
+		if err := publisher.PublishTrainer(command.Context(), token, trainer, upstream.CallOptions{Timeout: *requestTimeout}); err != nil {
+			return sanitizedPublisherError(err)
 		}
 		if *jsonOutput {
 			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("trainer publish", "published", struct {
 				Published bool `json:"published"`
-			}{Published: true}, nil, ""))
+			}{Published: true}, nil))
 		}
 		_, err = fmt.Fprintln(command.OutOrStdout(), "Tränaruppgifterna publicerades.")
 		return err
-	})
+	}
 	command.AddCommand(publish)
 	return command
 }
@@ -79,17 +79,4 @@ func sanitizedPublisherError(err error) error {
 		message = "Ogiltig tränarinmatning."
 	}
 	return output.NewError(public.Code, message)
-}
-
-func isNilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

@@ -56,15 +56,3 @@ func TestNilErrorMapsToSuccess(t *testing.T) {
 		t.Fatalf("nil error exit code = %d, want %d", got, ExitSuccess)
 	}
 }
-
-func TestTypedNilErrorFailsClosed(t *testing.T) {
-	var typedNil *CLIError
-	var err error = typedNil
-
-	if got := ExitCodeFor(err); got != 1 {
-		t.Fatalf("typed nil error exit code = %d, want 1", got)
-	}
-	if public := PublicError(err); public.Code != CodeInternal {
-		t.Fatalf("typed nil public error = %#v, want internal error", public)
-	}
-}

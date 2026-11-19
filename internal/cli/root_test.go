@@ -18,7 +18,7 @@ func TestRootHelpContainsCommandNameAndDescription(t *testing.T) {
 	}
 
 	help := output.String()
-	for _, expected := range []string{"raidnow", "Search for Raid NOW raids from your terminal"} {
+	for _, expected := range []string{"raidnow", "Use Raid NOW anonymously from your terminal"} {
 		if !strings.Contains(help, expected) {
 			t.Errorf("help output %q does not contain %q", help, expected)
 		}

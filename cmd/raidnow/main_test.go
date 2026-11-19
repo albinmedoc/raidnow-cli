@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,149 +34,6 @@ func (writer *failFirstWriter) Write(content []byte) (int, error) {
 	return writer.output.Write(content)
 }
 
-func TestReadmeDocumentsTrainerInputMilestoneAndSecretHandling(t *testing.T) {
-	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
-	if err != nil {
-		t.Fatalf("read README: %v", err)
-	}
-	contents := string(readme)
-	for _, required := range []string{
-		"working token bootstrap",
-		"per-invocation trainer-input library",
-		"token get` ignores `--token-file`",
-		"--trainer-code-file <path|->",
-		"never a raw argv flag",
-	} {
-		if !strings.Contains(contents, required) {
-			t.Fatalf("README trainer/token guidance does not contain %q", required)
-		}
-	}
-}
-
-func TestReadmeDocumentsSingleOpenNoclobberTokenSave(t *testing.T) {
-	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
-	if err != nil {
-		t.Fatalf("read README: %v", err)
-	}
-	contents := string(readme)
-	for _, required := range []string{
-		"token_file=./raidnow.token",
-		`umask 077; set -C; exec raidnow token get > "$token_file"`,
-		"user-owned, non-world-writable directory",
-		"existing regular file",
-		"symbolic link to a regular file",
-		"partial file",
-		"explicitly remove",
-		"special files",
-		"O_NOFOLLOW",
-	} {
-		if !strings.Contains(contents, required) {
-			t.Fatalf("README token-file example does not contain %q", required)
-		}
-	}
-	for _, forbidden := range []string{"mktemp", "chmod 600", "stat -c"} {
-		if strings.Contains(contents, forbidden) {
-			t.Fatalf("README still uses check/reopen flow %q", forbidden)
-		}
-	}
-}
-
-func TestReadmeTokenFileExampleHasDeterministicNoclobberBehavior(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("README noclobber example is Unix-only")
-	}
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("bash is unavailable")
-	}
-	script := readmeTokenSaveScript(t)
-	directory := t.TempDir()
-	fakeRaidnow := filepath.Join(directory, "raidnow")
-	invocations := filepath.Join(directory, "invocations")
-	fake := fmt.Sprintf("#!/bin/sh\nprintf invoked >> %q\nprintf 'example-secret-token\\n'\n", invocations)
-	if err := os.WriteFile(fakeRaidnow, []byte(fake), 0o700); err != nil {
-		t.Fatalf("write fake raidnow: %v", err)
-	}
-	run := func() error {
-		command := exec.Command("bash", "-c", script)
-		command.Dir = directory
-		command.Env = environmentWith(map[string]string{"PATH": directory + string(os.PathListSeparator) + os.Getenv("PATH")})
-		return command.Run()
-	}
-
-	if err := run(); err != nil {
-		t.Fatalf("create token file: %v", err)
-	}
-	tokenPath := filepath.Join(directory, "raidnow.token")
-	info, err := os.Lstat(tokenPath)
-	if err != nil {
-		t.Fatalf("stat token file: %v", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		t.Fatalf("token file mode = %v, want regular 0600", info.Mode())
-	}
-	content, err := os.ReadFile(tokenPath)
-	if err != nil {
-		t.Fatalf("read token file: %v", err)
-	}
-	if got, want := string(content), "example-secret-token\n"; got != want {
-		t.Fatalf("token file content = %q, want %q", got, want)
-	}
-
-	if err := os.WriteFile(tokenPath, []byte("existing\n"), 0o600); err != nil {
-		t.Fatalf("replace token fixture: %v", err)
-	}
-	if err := os.Remove(invocations); err != nil {
-		t.Fatalf("reset invocation marker: %v", err)
-	}
-	if err := run(); err == nil {
-		t.Fatal("existing destination: got success, want noclobber failure")
-	}
-	if got, _ := os.ReadFile(tokenPath); string(got) != "existing\n" {
-		t.Fatalf("existing destination changed to %q", got)
-	}
-	if _, err := os.Stat(invocations); !os.IsNotExist(err) {
-		t.Fatalf("producer invoked for existing destination: %v", err)
-	}
-
-	if err := os.Remove(tokenPath); err != nil {
-		t.Fatalf("remove existing destination: %v", err)
-	}
-	target := filepath.Join(directory, "target")
-	if err := os.WriteFile(target, []byte("target\n"), 0o600); err != nil {
-		t.Fatalf("write symlink target: %v", err)
-	}
-	if err := os.Symlink(target, tokenPath); err != nil {
-		t.Fatalf("create destination symlink: %v", err)
-	}
-	if err := run(); err == nil {
-		t.Fatal("symlink destination: got success, want noclobber failure")
-	}
-	if got, _ := os.ReadFile(target); string(got) != "target\n" {
-		t.Fatalf("symlink target changed to %q", got)
-	}
-	if _, err := os.Stat(invocations); !os.IsNotExist(err) {
-		t.Fatalf("producer invoked for symlink destination: %v", err)
-	}
-}
-
-func readmeTokenSaveScript(t *testing.T) string {
-	t.Helper()
-	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
-	if err != nil {
-		t.Fatalf("read README: %v", err)
-	}
-	contents := string(readme)
-	start := strings.Index(contents, "token_file=./raidnow.token")
-	if start < 0 {
-		t.Fatal("README token-file example start is missing")
-	}
-	end := strings.Index(contents[start:], "\n```")
-	if end < 0 {
-		t.Fatal("README token-file example end is missing")
-	}
-	return contents[start : start+end]
-}
-
 func TestBinaryWithoutArgumentsPrintsHelpAndSucceeds(t *testing.T) {
 	binary := buildBinary(t)
 	workingDirectory := t.TempDir()
@@ -188,7 +45,7 @@ func TestBinaryWithoutArgumentsPrintsHelpAndSucceeds(t *testing.T) {
 		t.Fatalf("execute binary without arguments: %v\noutput:\n%s", err, output)
 	}
 
-	for _, expected := range []string{"Usage:", "Search for Raid NOW raids from your terminal"} {
+	for _, expected := range []string{"Usage:", "Use Raid NOW anonymously from your terminal"} {
 		if !strings.Contains(string(output), expected) {
 			t.Errorf("output %q does not contain %q", output, expected)
 		}
@@ -287,7 +144,7 @@ func TestTokenWriterFailureIsSanitizedInternalJSONError(t *testing.T) {
 	if exitCode := run([]string{"--json", "token", "get"}, stdout, &stderr); exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1", exitCode)
 	}
-	want := "{\"ok\":false,\"command\":\"raidnow\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
+	want := "{\"ok\":false,\"command\":\"token get\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
 	if got := stdout.output.String(); got != want {
 		t.Fatalf("stdout recovery output = %q, want exact %q", got, want)
 	}
@@ -561,6 +418,7 @@ func TestRunTrainerPublishExitOutputAndNoSideEffects(t *testing.T) {
 		{name: "human success", publisher: &mainStubPublisher{}, wantOut: "Tränaruppgifterna publicerades.\n"},
 		{name: "json success", json: true, publisher: &mainStubPublisher{}, wantOut: "{\"ok\":true,\"command\":\"trainer publish\",\"status\":\"published\",\"data\":{\"published\":true},\"warnings\":[]}\n"},
 		{name: "human uncertain", publisher: &mainStubPublisher{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret-marker")}, wantExit: 9, wantErr: "Fel [WRITE_OUTCOME_UNKNOWN]: Upstream-anslutningen bröts och skrivningens utfall är okänt.\n"},
+		{name: "json uncertain", json: true, publisher: &mainStubPublisher{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret-marker")}, wantExit: 9, wantOut: "{\"ok\":false,\"command\":\"trainer publish\",\"status\":\"failed\",\"error\":{\"code\":\"WRITE_OUTCOME_UNKNOWN\",\"message\":\"Upstream-anslutningen bröts och skrivningens utfall är okänt.\"}}\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			working := t.TempDir()
@@ -577,7 +435,7 @@ func TestRunTrainerPublishExitOutputAndNoSideEffects(t *testing.T) {
 				args = append([]string{"--json"}, args...)
 			}
 			var stdout, stderr strings.Builder
-			exit := runWithOptions(args, &stdout, &stderr, cli.RootOptions{Bootstrap: mainStubBootstrap{}, Publisher: testCase.publisher, Config: &cli.RootConfig{RequestTimeout: time.Second}})
+			exit := runWithOptions(args, &stdout, &stderr, cli.RootOptions{Bootstrap: mainStubBootstrap{}, Publisher: testCase.publisher, RequestTimeout: time.Second})
 			if exit != testCase.wantExit || stdout.String() != testCase.wantOut || stderr.String() != testCase.wantErr {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
 			}

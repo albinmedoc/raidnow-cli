@@ -23,27 +23,23 @@ func (stub *stubTokenBootstrapper) Token(context.Context) (string, error) {
 }
 
 func TestRootPreservesPreconfiguredTokenFileAsFlagDefault(t *testing.T) {
-	config := &RootConfig{TokenFile: "/preconfigured/token"}
-	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Config: config})
+	options := RootOptions{Bootstrap: &stubTokenBootstrapper{}, TokenFile: "/preconfigured/token"}
+	command := NewRootCommandWithOptions(options)
 
 	flag := command.PersistentFlags().Lookup("token-file")
 	if flag == nil {
 		t.Fatal("--token-file flag is missing")
 	}
-	if got, want := flag.DefValue, config.TokenFile; got != want {
+	if got, want := flag.DefValue, options.TokenFile; got != want {
 		t.Fatalf("--token-file default = %q, want preconfigured %q", got, want)
-	}
-	if got, want := config.TokenFile, "/preconfigured/token"; got != want {
-		t.Fatalf("configured token file = %q, want preserved %q", got, want)
 	}
 }
 
 func TestTokenFileFlagIsPersistentConfiguredAndIgnoredByTokenGet(t *testing.T) {
 	bootstrap := &stubTokenBootstrapper{token: "fresh-token"}
-	config := &RootConfig{}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	command := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap, Config: config})
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap})
 	command.SetOut(&stdout)
 	command.SetErr(&stderr)
 	command.SetArgs([]string{"--token-file", "/definitely/missing/raidnow.token", "token", "get"})
@@ -51,9 +47,7 @@ func TestTokenFileFlagIsPersistentConfiguredAndIgnoredByTokenGet(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("execute token get with token file configured: %v", err)
 	}
-	if got, want := config.TokenFile, ""; got != want {
-		t.Fatalf("caller config token file = %q, want unchanged %q", got, want)
-	}
+
 	if got, want := stdout.String(), "fresh-token\n"; got != want {
 		t.Fatalf("stdout = %q, want exact %q", got, want)
 	}
@@ -65,7 +59,7 @@ func TestTokenFileFlagIsPersistentConfiguredAndIgnoredByTokenGet(t *testing.T) {
 	}
 
 	var help bytes.Buffer
-	helpCommand := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap, Config: &RootConfig{}})
+	helpCommand := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap})
 	helpCommand.SetOut(&help)
 	helpCommand.SetErr(&help)
 	helpCommand.SetArgs([]string{"--help"})

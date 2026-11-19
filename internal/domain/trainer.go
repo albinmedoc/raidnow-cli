@@ -1,7 +1,7 @@
 package domain
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -14,30 +14,7 @@ import (
 // It permits known values such as "se", "jp", and "world" without a fixed catalog.
 const MaxCountryBytes = 16
 
-type ValidationField string
-
-const (
-	ValidationFieldName    ValidationField = "trainer name"
-	ValidationFieldCode    ValidationField = "trainer code"
-	ValidationFieldLevel   ValidationField = "trainer level"
-	ValidationFieldCountry ValidationField = "trainer country"
-)
-
-type ValidationError struct {
-	field ValidationField
-}
-
-func (err *ValidationError) Error() string {
-	return "invalid " + string(err.field)
-}
-
-func (err *ValidationError) Field() ValidationField {
-	return err.field
-}
-
-func invalid(field ValidationField) error {
-	return &ValidationError{field: field}
-}
+var ErrInvalidTrainer = errors.New("invalid trainer")
 
 // Trainer is the normalized, per-invocation trainer identity used in upstream forms.
 // Its fields are intentionally private so callers must choose an explicit form accessor.
@@ -50,15 +27,15 @@ type Trainer struct {
 
 func NewTrainer(name, code string, level int, country string) (Trainer, error) {
 	if hasUnsafeTrainerText(name) {
-		return Trainer{}, invalid(ValidationFieldName)
+		return Trainer{}, ErrInvalidTrainer
 	}
 	name = strings.TrimSpace(name)
 	if len(name) < 3 || !isASCIIAlphanumeric(name) {
-		return Trainer{}, invalid(ValidationFieldName)
+		return Trainer{}, ErrInvalidTrainer
 	}
 
 	if hasUnsafeTrainerText(code) {
-		return Trainer{}, invalid(ValidationFieldCode)
+		return Trainer{}, ErrInvalidTrainer
 	}
 	code = strings.Map(func(r rune) rune {
 		if r == ' ' || r == '\u3000' {
@@ -67,19 +44,19 @@ func NewTrainer(name, code string, level int, country string) (Trainer, error) {
 		return r
 	}, code)
 	if len(code) != 12 || !isASCIIDigits(code) {
-		return Trainer{}, invalid(ValidationFieldCode)
+		return Trainer{}, ErrInvalidTrainer
 	}
 
 	if level < 1 || level > 80 {
-		return Trainer{}, invalid(ValidationFieldLevel)
+		return Trainer{}, ErrInvalidTrainer
 	}
 
 	if hasUnsafeTrainerText(country) {
-		return Trainer{}, invalid(ValidationFieldCountry)
+		return Trainer{}, ErrInvalidTrainer
 	}
 	country = strings.ToLower(strings.TrimSpace(country))
 	if country == "" || len(country) > MaxCountryBytes {
-		return Trainer{}, invalid(ValidationFieldCountry)
+		return Trainer{}, ErrInvalidTrainer
 	}
 
 	return Trainer{name: name, code: code, level: level, country: country}, nil
@@ -141,14 +118,4 @@ func (trainer Trainer) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, ", country:")
 	_, _ = io.WriteString(state, trainer.country)
 	_, _ = io.WriteString(state, "}")
-}
-
-// MarshalJSON deliberately omits the trainer code. Upstream form construction must
-// use CodeFormValue explicitly.
-func (trainer Trainer) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Name    string `json:"name"`
-		Level   int    `json:"level"`
-		Country string `json:"country"`
-	}{Name: trainer.name, Level: trainer.level, Country: trainer.country})
 }

@@ -13,7 +13,7 @@ import (
 
 func TestTrainerInputFlagsReadNormalizedTrainerFromStdinWithoutCodeArgument(t *testing.T) {
 	command := &cobra.Command{Use: "future"}
-	input := BindTrainerInputFlags(command)
+	input := bindTrainerInputFlags(command)
 	command.SetIn(strings.NewReader("1234\u30005678 9012\n"))
 	arguments := []string{
 		"--trainer-name", " Ash123 ",
@@ -24,7 +24,7 @@ func TestTrainerInputFlagsReadNormalizedTrainerFromStdinWithoutCodeArgument(t *t
 	if err := command.ParseFlags(arguments); err != nil {
 		t.Fatalf("parse flags: %v", err)
 	}
-	trainer, err := input.Read(command)
+	trainer, err := input.read(command)
 	if err != nil {
 		t.Fatalf("read trainer input: %v", err)
 	}
@@ -54,11 +54,11 @@ func TestTrainerInputFlagsReadProtectedFileWithoutWritingTrainerValues(t *testin
 	}
 
 	command := &cobra.Command{Use: "future"}
-	input := BindTrainerInputFlags(command)
+	input := bindTrainerInputFlags(command)
 	if err := command.ParseFlags([]string{"--trainer-name", "Ash123", "--trainer-level", "1", "--trainer-country", "se", "--trainer-code-file", path}); err != nil {
 		t.Fatalf("parse flags: %v", err)
 	}
-	trainer, err := input.Read(command)
+	trainer, err := input.read(command)
 	if err != nil {
 		t.Fatalf("read trainer input: %v", err)
 	}
@@ -92,18 +92,18 @@ func TestTrainerInputFlagsReturnSanitizedInvalidInputForMissingCodeFile(t *testi
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			command := &cobra.Command{Use: "future"}
-			input := BindTrainerInputFlags(command)
+			input := bindTrainerInputFlags(command)
 			if err := command.ParseFlags(testCase.arguments); err != nil {
 				t.Fatalf("parse flags: %v", err)
 			}
-			_, err := input.Read(command)
+			_, err := input.read(command)
 			if err == nil {
 				t.Fatal("read missing code file: got nil error")
 			}
 			if got := output.ExitCodeFor(err); got != output.ExitInvalidInput {
 				t.Fatalf("exit mapping = %d, want %d", got, output.ExitInvalidInput)
 			}
-			for _, rendered := range []string{err.Error(), strings.TrimSpace(string(mustJSON(t, output.NewFailure("future", "failed", err, ""))))} {
+			for _, rendered := range []string{err.Error(), strings.TrimSpace(string(mustJSON(t, output.NewFailure("future", "failed", err))))} {
 				if strings.Contains(rendered, "123456789012") || strings.Contains(rendered, missing) {
 					t.Fatalf("error exposed code or path: %q", rendered)
 				}
@@ -112,47 +112,7 @@ func TestTrainerInputFlagsReturnSanitizedInvalidInputForMissingCodeFile(t *testi
 	}
 }
 
-func TestRootCommandTreeContainsOnlyStatelessTokenAndTrainerCommands(t *testing.T) {
-	root := NewRootCommand()
-	seen := map[string]bool{}
-	var visit func(*cobra.Command)
-	visit = func(command *cobra.Command) {
-		for _, child := range command.Commands() {
-			seen[child.CommandPath()] = true
-			visit(child)
-		}
-	}
-	visit(root)
-	for _, required := range []string{"raidnow token", "raidnow token get", "raidnow trainer", "raidnow trainer publish"} {
-		if !seen[required] {
-			t.Fatalf("missing command %q; tree=%#v", required, seen)
-		}
-	}
-	for _, forbidden := range []string{"auth", "login", "profile", "import", "export"} {
-		for path := range seen {
-			if strings.Contains(path, " "+forbidden) {
-				t.Fatalf("forbidden command %q in tree", path)
-			}
-		}
-	}
-	if root.PersistentFlags().Lookup("token") != nil {
-		t.Fatal("raw --token flag must not exist")
-	}
-	if root.PersistentFlags().Lookup("request-timeout") == nil {
-		t.Fatal("global --request-timeout flag is missing")
-	}
-}
-
-func TestRootDoesNotExposeTrainerFlagsGlobally(t *testing.T) {
-	command := NewRootCommand()
-	for _, name := range []string{"trainer-name", "trainer-level", "trainer-country", "trainer-code-file"} {
-		if command.PersistentFlags().Lookup(name) != nil || command.Flags().Lookup(name) != nil {
-			t.Fatalf("root exposes misleading global --%s", name)
-		}
-	}
-}
-
-func mustJSON(t *testing.T, value output.Envelope) []byte {
+func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	var buffer bytes.Buffer
 	if err := output.RenderJSON(&buffer, value); err != nil {

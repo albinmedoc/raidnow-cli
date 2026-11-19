@@ -19,14 +19,14 @@ func newTokenCommand(bootstrap TokenBootstrapper, jsonOutput *bool) *cobra.Comma
 		Short: "Manage anonymous Raid NOW tokens",
 		Args:  usageNoArgs,
 	}
-	command.RunE = withInvocationReset(func(command *cobra.Command, _ []string) error {
+	command.RunE = func(command *cobra.Command, _ []string) error {
 		return command.Help()
-	})
+	}
 	command.AddCommand(&cobra.Command{
 		Use:   "get",
 		Short: "Fetch a new anonymous token",
 		Args:  usageNoArgs,
-		RunE: withInvocationReset(func(command *cobra.Command, _ []string) error {
+		RunE: func(command *cobra.Command, _ []string) error {
 			token, err := bootstrap.Token(command.Context())
 			if err != nil {
 				code := output.CodeReadNetwork
@@ -34,18 +34,17 @@ func newTokenCommand(bootstrap TokenBootstrapper, jsonOutput *bool) *cobra.Comma
 				if errors.As(err, &typed) && typed != nil && output.ExitCodeFor(typed) != 1 {
 					code = typed.Code
 				}
-				safeError := output.NewError(code, "Kunde inte hämta en anonym token från Raid NOW.")
-				return &CommandError{Command: "token get", Err: safeError}
+				return output.NewError(code, "Kunde inte hämta en anonym token från Raid NOW.")
 			}
 			if *jsonOutput {
 				return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("token get", "secret", struct {
 					Token          string `json:"token"`
 					ContainsSecret bool   `json:"containsSecret"`
-				}{Token: token, ContainsSecret: true}, []string{"Tokenen är hemlig; lagra och dela den säkert."}, ""))
+				}{Token: token, ContainsSecret: true}, []string{"Tokenen är hemlig; lagra och dela den säkert."}))
 			}
 			_, err = fmt.Fprintln(command.OutOrStdout(), token)
 			return err
-		}),
+		},
 	})
 	return command
 }

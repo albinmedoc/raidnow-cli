@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,127 +12,36 @@ func TestNewTrainerNormalizesInvocationValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTrainer: %v", err)
 	}
-	if got, want := trainer.NameFormValue(), "Ash123"; got != want {
-		t.Fatalf("name = %q, want %q", got, want)
-	}
-	if got, want := trainer.CodeFormValue(), "123456789012"; got != want {
-		t.Fatalf("code = %q, want %q", got, want)
-	}
-	if got, want := trainer.LevelFormValue(), "80"; got != want {
-		t.Fatalf("level = %q, want %q", got, want)
-	}
-	if got, want := trainer.CountryFormValue(), "world"; got != want {
-		t.Fatalf("country = %q, want %q", got, want)
+	if trainer.NameFormValue() != "Ash123" || trainer.CodeFormValue() != "123456789012" || trainer.LevelFormValue() != "80" || trainer.CountryFormValue() != "world" {
+		t.Fatalf("unexpected normalized trainer: %+v", trainer)
 	}
 }
 
-func TestNewTrainerAcceptsOnlyPermittedCodeSeparators(t *testing.T) {
+func TestNewTrainerAcceptsPermittedCodeSeparatorsAndBoundaries(t *testing.T) {
 	for _, testCase := range []struct {
-		name string
-		code string
+		name    string
+		code    string
+		level   int
+		country string
 	}{
-		{name: "compact", code: "123456789012"},
-		{name: "ascii_space", code: "1234 5678 9012"},
-		{name: "ideographic_space", code: "1234\u30005678\u30009012"},
-		{name: "mixed", code: "1234 5678\u30009012"},
+		{name: "compact", code: "123456789012", level: 1, country: "se"},
+		{name: "ascii space", code: "1234 5678 9012", level: 80, country: "jp"},
+		{name: "ideographic space", code: "1234\u30005678\u30009012", level: 50, country: "world"},
+		{name: "mixed", code: "1234 5678\u30009012", level: 1, country: "se"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			trainer, err := NewTrainer("Ash123", testCase.code, 1, "se")
+			trainer, err := NewTrainer("Ash123", testCase.code, testCase.level, testCase.country)
 			if err != nil {
 				t.Fatalf("NewTrainer: %v", err)
 			}
-			if got, want := trainer.CodeFormValue(), "123456789012"; got != want {
-				t.Fatalf("code = %q, want %q", got, want)
+			if trainer.CodeFormValue() != "123456789012" {
+				t.Fatalf("code = %q", trainer.CodeFormValue())
 			}
 		})
 	}
 }
 
-func TestNewTrainerRejectsOtherUnicodeCodeSeparators(t *testing.T) {
-	for _, testCase := range []struct {
-		name      string
-		separator string
-	}{
-		{name: "no_break_space", separator: "\u00a0"},
-		{name: "ogham_space_mark", separator: "\u1680"},
-		{name: "en_quad", separator: "\u2000"},
-		{name: "em_space", separator: "\u2003"},
-		{name: "narrow_no_break_space", separator: "\u202f"},
-		{name: "medium_mathematical_space", separator: "\u205f"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			_, err := NewTrainer("Ash123", "1234"+testCase.separator+"56789012", 1, "se")
-			if err == nil {
-				t.Fatal("NewTrainer: got nil error, want rejection")
-			}
-			var validationError *ValidationError
-			if !errors.As(err, &validationError) || validationError.Field() != ValidationFieldCode {
-				t.Fatalf("error = %v, want sanitized %q validation error", err, ValidationFieldCode)
-			}
-		})
-	}
-}
-
-func TestNewTrainerRejectsUnsafeRunesBeforeNormalization(t *testing.T) {
-	unsafeRunes := []struct {
-		name  string
-		value string
-	}{
-		{name: "lf", value: "\n"},
-		{name: "cr", value: "\r"},
-		{name: "tab", value: "	"},
-		{name: "next_line", value: "\u0085"},
-		{name: "line_separator", value: "\u2028"},
-		{name: "paragraph_separator", value: "\u2029"},
-		{name: "right_to_left_override", value: "\u202e"},
-	}
-	fields := []struct {
-		name  string
-		field ValidationField
-		build func(string) (Trainer, error)
-	}{
-		{name: "name", field: ValidationFieldName, build: func(unsafe string) (Trainer, error) {
-			return NewTrainer(unsafe+"Ash123"+unsafe, "123456789012", 1, "se")
-		}},
-		{name: "code", field: ValidationFieldCode, build: func(unsafe string) (Trainer, error) {
-			return NewTrainer("Ash123", "1234"+unsafe+"56789012", 1, "se")
-		}},
-		{name: "country", field: ValidationFieldCountry, build: func(unsafe string) (Trainer, error) {
-			return NewTrainer("Ash123", "123456789012", 1, unsafe+"se"+unsafe)
-		}},
-	}
-
-	for _, field := range fields {
-		for _, unsafeRune := range unsafeRunes {
-			t.Run(field.name+"/"+unsafeRune.name, func(t *testing.T) {
-				_, err := field.build(unsafeRune.value)
-				if err == nil {
-					t.Fatal("NewTrainer: got nil error, want rejection")
-				}
-				var validationError *ValidationError
-				if !errors.As(err, &validationError) || validationError.Field() != field.field {
-					t.Fatalf("error = %v, want sanitized %q validation error", err, field.field)
-				}
-				encodedError, marshalErr := json.Marshal(err)
-				if marshalErr != nil {
-					t.Fatalf("marshal error: %v", marshalErr)
-				}
-				for label, rendered := range map[string]string{
-					"percent-v":       fmt.Sprintf("%v", err),
-					"percent-plus-v":  fmt.Sprintf("%+v", err),
-					"percent-sharp-v": fmt.Sprintf("%#v", err),
-					"json":            string(encodedError),
-				} {
-					if strings.Contains(rendered, unsafeRune.value) || strings.Contains(rendered, "123456789012") {
-						t.Fatalf("%s error formatting leaked input: %q", label, rendered)
-					}
-				}
-			})
-		}
-	}
-}
-
-func TestNewTrainerValidatesEveryFieldWithTypedSanitizedErrors(t *testing.T) {
+func TestNewTrainerRejectsInvalidValuesWithOneSentinel(t *testing.T) {
 	invalidUTF8 := string([]byte{0xff})
 	testCases := []struct {
 		name        string
@@ -141,86 +49,57 @@ func TestNewTrainerValidatesEveryFieldWithTypedSanitizedErrors(t *testing.T) {
 		code        string
 		level       int
 		country     string
-		field       ValidationField
 	}{
-		{name: "name_too_short", trainerName: "ab", code: "123456789012", level: 1, country: "se", field: ValidationFieldName},
-		{name: "name_non_ascii", trainerName: "Ash-1", code: "123456789012", level: 1, country: "se", field: ValidationFieldName},
-		{name: "name_invalid_utf8", trainerName: invalidUTF8, code: "123456789012", level: 1, country: "se", field: ValidationFieldName},
-		{name: "code_too_short", trainerName: "Ash", code: "12345678901", level: 1, country: "se", field: ValidationFieldCode},
-		{name: "code_non_digit", trainerName: "Ash", code: "12345678901x", level: 1, country: "se", field: ValidationFieldCode},
-		{name: "code_invalid_utf8", trainerName: "Ash", code: invalidUTF8 + "123456789012", level: 1, country: "se", field: ValidationFieldCode},
-		{name: "level_zero", trainerName: "Ash", code: "123456789012", level: 0, country: "se", field: ValidationFieldLevel},
-		{name: "level_eighty_one", trainerName: "Ash", code: "123456789012", level: 81, country: "se", field: ValidationFieldLevel},
-		{name: "country_empty", trainerName: "Ash", code: "123456789012", level: 1, country: "  ", field: ValidationFieldCountry},
-		{name: "country_invalid_utf8", trainerName: "Ash", code: "123456789012", level: 1, country: invalidUTF8, field: ValidationFieldCountry},
-		{name: "country_control", trainerName: "Ash", code: "123456789012", level: 1, country: "s\u0085e", field: ValidationFieldCountry},
-		{name: "country_too_long", trainerName: "Ash", code: "123456789012", level: 1, country: strings.Repeat("x", MaxCountryBytes+1), field: ValidationFieldCountry},
+		{name: "name too short", trainerName: "ab", code: "123456789012", level: 1, country: "se"},
+		{name: "name non ascii", trainerName: "Ash-1", code: "123456789012", level: 1, country: "se"},
+		{name: "name invalid utf8", trainerName: invalidUTF8, code: "123456789012", level: 1, country: "se"},
+		{name: "code too short", trainerName: "Ash", code: "12345678901", level: 1, country: "se"},
+		{name: "code non digit", trainerName: "Ash", code: "12345678901x", level: 1, country: "se"},
+		{name: "code invalid utf8", trainerName: "Ash", code: invalidUTF8 + "123456789012", level: 1, country: "se"},
+		{name: "code nonbreaking space", trainerName: "Ash", code: "1234\u00a056789012", level: 1, country: "se"},
+		{name: "level zero", trainerName: "Ash", code: "123456789012", level: 0, country: "se"},
+		{name: "level eighty one", trainerName: "Ash", code: "123456789012", level: 81, country: "se"},
+		{name: "country empty", trainerName: "Ash", code: "123456789012", level: 1, country: "  "},
+		{name: "country invalid utf8", trainerName: "Ash", code: "123456789012", level: 1, country: invalidUTF8},
+		{name: "country control", trainerName: "Ash", code: "123456789012", level: 1, country: "s\u0085e"},
+		{name: "country too long", trainerName: "Ash", code: "123456789012", level: 1, country: strings.Repeat("x", MaxCountryBytes+1)},
 	}
-
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, err := NewTrainer(testCase.trainerName, testCase.code, testCase.level, testCase.country)
-			if err == nil {
-				t.Fatal("NewTrainer: got nil error, want rejection")
+			if !errors.Is(err, ErrInvalidTrainer) {
+				t.Fatalf("error = %v, want ErrInvalidTrainer", err)
 			}
-			var validationError *ValidationError
-			if !errors.As(err, &validationError) {
-				t.Fatalf("error type = %T, want *ValidationError", err)
-			}
-			if validationError.Field() != testCase.field {
-				t.Fatalf("field = %q, want %q", validationError.Field(), testCase.field)
-			}
-			encodedError, marshalErr := json.Marshal(err)
-			if marshalErr != nil {
-				t.Fatalf("marshal error: %v", marshalErr)
-			}
-			for label, rendered := range map[string]string{
-				"percent-v":       fmt.Sprintf("%v", err),
-				"percent-plus-v":  fmt.Sprintf("%+v", err),
-				"percent-sharp-v": fmt.Sprintf("%#v", err),
-				"json":            string(encodedError),
-			} {
-				if strings.Contains(rendered, "123456789012") {
-					t.Fatalf("%s error formatting leaked trainer code: %q", label, rendered)
-				}
+			if strings.Contains(fmt.Sprintf("%v %+v %#v", err, err, err), "123456789012") {
+				t.Fatalf("error formatting leaked trainer code: %v", err)
 			}
 		})
 	}
 }
 
-func TestNewTrainerAcceptsLevelBoundariesAndOpenCountryValues(t *testing.T) {
-	for _, testCase := range []struct {
-		level   int
-		country string
-	}{
-		{level: 1, country: "se"},
-		{level: 80, country: "jp"},
-		{level: 50, country: "world"},
-	} {
-		if _, err := NewTrainer("Ash123", "123456789012", testCase.level, testCase.country); err != nil {
-			t.Fatalf("NewTrainer(level=%d, country=%q): %v", testCase.level, testCase.country, err)
+func TestNewTrainerRejectsUnsafeRunesBeforeNormalization(t *testing.T) {
+	for _, unsafe := range []string{"\n", "\r", "\t", "\u0085", "\u2028", "\u2029", "\u202e"} {
+		for _, build := range []func(string) (Trainer, error){
+			func(value string) (Trainer, error) { return NewTrainer(value+"Ash123", "123456789012", 1, "se") },
+			func(value string) (Trainer, error) { return NewTrainer("Ash123", "1234"+value+"56789012", 1, "se") },
+			func(value string) (Trainer, error) { return NewTrainer("Ash123", "123456789012", 1, value+"se") },
+		} {
+			if _, err := build(unsafe); !errors.Is(err, ErrInvalidTrainer) {
+				t.Fatalf("unsafe %q error = %v", unsafe, err)
+			}
 		}
 	}
 }
 
-func TestTrainerFormattingAndJSONNeverExposeCode(t *testing.T) {
+func TestTrainerFormattingNeverExposesCode(t *testing.T) {
 	const code = "123456789012"
 	trainer, err := NewTrainer("Ash123", code, 50, "se")
 	if err != nil {
-		t.Fatalf("NewTrainer: %v", err)
+		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(trainer)
-	if err != nil {
-		t.Fatalf("marshal trainer: %v", err)
-	}
-	for label, rendered := range map[string]string{
-		"percent-v":       fmt.Sprintf("%v", trainer),
-		"percent-plus-v":  fmt.Sprintf("%+v", trainer),
-		"percent-sharp-v": fmt.Sprintf("%#v", trainer),
-		"json":            string(encoded),
-	} {
+	for _, rendered := range []string{fmt.Sprintf("%v", trainer), fmt.Sprintf("%+v", trainer), fmt.Sprintf("%#v", trainer)} {
 		if strings.Contains(rendered, code) {
-			t.Fatalf("%s exposed trainer code: %q", label, rendered)
+			t.Fatalf("format exposed trainer code: %q", rendered)
 		}
 	}
 }

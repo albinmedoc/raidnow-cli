@@ -6,138 +6,57 @@ import (
 	"testing"
 )
 
-func TestRenderJSONSuccessEnvelopeHasStableOrderAndEmptyWarnings(t *testing.T) {
+func TestRenderJSONSuccessHasStableSchemaAndEmptyWarnings(t *testing.T) {
 	var destination bytes.Buffer
 	envelope := NewSuccess("version", "ok", struct {
 		Version string `json:"version"`
-	}{Version: "dev"}, nil, "")
+	}{Version: "dev"}, nil)
 
 	if err := RenderJSON(&destination, envelope); err != nil {
 		t.Fatalf("render JSON success: %v", err)
 	}
-
 	const want = "{\"ok\":true,\"command\":\"version\",\"status\":\"ok\",\"data\":{\"version\":\"dev\"},\"warnings\":[]}\n"
 	if got := destination.String(); got != want {
 		t.Fatalf("JSON success = %q, want %q", got, want)
 	}
 }
 
-func TestTypedResultBuildsSuccessEnvelope(t *testing.T) {
-	result := Result[string]{
-		Command:     "token get",
-		Status:      "ok",
-		Data:        "issued",
-		Warnings:    []string{"Spara token säkert."},
-		OperationID: "operation-1",
-	}
-
-	envelope := result.Envelope()
-	if !envelope.OK || envelope.Command != result.Command || envelope.Data != result.Data {
-		t.Fatalf("result envelope = %#v, want command and typed data preserved", envelope)
-	}
-	if len(envelope.Warnings) != 1 || envelope.Warnings[0] != result.Warnings[0] {
-		t.Fatalf("result warnings = %#v, want %#v", envelope.Warnings, result.Warnings)
-	}
-	if envelope.OperationID != result.OperationID {
-		t.Fatalf("operation ID = %q, want %q", envelope.OperationID, result.OperationID)
-	}
-}
-
-func TestRenderJSONFailureEnvelopeHasStableSchema(t *testing.T) {
+func TestRenderJSONFailureHasStableSchema(t *testing.T) {
 	var destination bytes.Buffer
-	envelope := NewFailure("search", "failed", NewError(CodeNotFound, "Ingen raid hittades."), "operation-7")
+	envelope := NewFailure("search", "failed", NewError(CodeNotFound, "Ingen raid hittades."))
 
 	if err := RenderJSON(&destination, envelope); err != nil {
 		t.Fatalf("render JSON failure: %v", err)
 	}
-
-	const want = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Ingen raid hittades.\"},\"operationId\":\"operation-7\"}\n"
+	const want = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Ingen raid hittades.\"}}\n"
 	if got := destination.String(); got != want {
 		t.Fatalf("JSON failure = %q, want %q", got, want)
 	}
 }
 
-func TestRenderJSONNormalizesNilSuccessWarnings(t *testing.T) {
-	testCases := []struct {
-		name     string
-		envelope Envelope
-	}{
-		{name: "value", envelope: SuccessEnvelope{OK: true, Command: "version", Status: "ok", Data: "dev"}},
-		{name: "pointer", envelope: &SuccessEnvelope{OK: true, Command: "version", Status: "ok", Data: "dev"}},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var destination bytes.Buffer
-			if err := RenderJSON(&destination, testCase.envelope); err != nil {
-				t.Fatalf("render JSON success: %v", err)
-			}
-			const want = "{\"ok\":true,\"command\":\"version\",\"status\":\"ok\",\"data\":\"dev\",\"warnings\":[]}\n"
-			if got := destination.String(); got != want {
-				t.Fatalf("JSON success = %q, want %q", got, want)
-			}
-		})
-	}
-}
-
-func TestRenderJSONRejectsNilEnvelopes(t *testing.T) {
-	var typedNilSuccess *SuccessEnvelope
-	var typedNilFailure *FailureEnvelope
-	testCases := []struct {
-		name     string
-		envelope Envelope
-	}{
-		{name: "nil"},
-		{name: "typed nil success", envelope: typedNilSuccess},
-		{name: "typed nil failure", envelope: typedNilFailure},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			var destination bytes.Buffer
-			if err := RenderJSON(&destination, testCase.envelope); err == nil {
-				t.Fatal("render nil envelope: got nil error, want validation error")
-			}
-			if destination.Len() != 0 {
-				t.Fatalf("render nil envelope wrote %q, want no output", destination.String())
-			}
-		})
-	}
-}
-
 func TestRenderJSONReturnsEncodingErrors(t *testing.T) {
-	envelope := NewSuccess("search", "ok", make(chan int), nil, "")
-
-	if err := RenderJSON(&bytes.Buffer{}, envelope); err == nil {
+	if err := RenderJSON(&bytes.Buffer{}, NewSuccess("search", "ok", make(chan int), nil)); err == nil {
 		t.Fatal("render unsupported JSON value: got nil error, want encoding error")
 	}
 }
 
-func TestFailureEnvelopeHidesUnknownErrorDetails(t *testing.T) {
-	var destination bytes.Buffer
-	envelope := NewFailure("search", "failed", errors.New("token=do-not-print"), "")
-
-	if err := RenderJSON(&destination, envelope); err != nil {
-		t.Fatalf("render unknown failure: %v", err)
+func TestFailureHidesUnknownDetailsAndRedactsSecrets(t *testing.T) {
+	var unknown bytes.Buffer
+	if err := RenderJSON(&unknown, NewFailure("search", "failed", errors.New("token=do-not-print"))); err != nil {
+		t.Fatal(err)
+	}
+	const wantUnknown = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
+	if unknown.String() != wantUnknown {
+		t.Fatalf("unknown failure = %q, want %q", unknown.String(), wantUnknown)
 	}
 
-	const want = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
-	if got := destination.String(); got != want {
-		t.Fatalf("JSON unknown failure = %q, want %q", got, want)
-	}
-}
-
-func TestFailureEnvelopeRedactsKnownErrorMessage(t *testing.T) {
-	var destination bytes.Buffer
+	var redacted bytes.Buffer
 	err := NewError(CodeInvalidInput, "Ogiltig token-value för 123456789012")
-	envelope := NewFailure("search", "failed", err, "", "token-value")
-
-	if renderError := RenderJSON(&destination, envelope); renderError != nil {
-		t.Fatalf("render redacted failure: %v", renderError)
+	if renderError := RenderJSON(&redacted, NewFailure("search", "failed", err, "token-value")); renderError != nil {
+		t.Fatal(renderError)
 	}
-
-	const want = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INVALID_INPUT\",\"message\":\"Ogiltig [REDACTED] för [REDACTED]\"}}\n"
-	if got := destination.String(); got != want {
-		t.Fatalf("JSON redacted failure = %q, want %q", got, want)
+	const wantRedacted = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INVALID_INPUT\",\"message\":\"Ogiltig [REDACTED] för [REDACTED]\"}}\n"
+	if redacted.String() != wantRedacted {
+		t.Fatalf("redacted failure = %q, want %q", redacted.String(), wantRedacted)
 	}
 }

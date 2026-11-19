@@ -7,81 +7,43 @@ import (
 )
 
 func TestRedactSecretsAndStandaloneTrainerCodes(t *testing.T) {
-	const input = "token abc123, tränarkod 123456789012, raid 12345, lång 9123456789012"
-
-	got := Redact(input, "abc123", "")
-	const want = "token [REDACTED], tränarkod [REDACTED], raid 12345, lång 9123456789012"
-	if got != want {
-		t.Fatalf("redacted text = %q, want %q", got, want)
+	testCases := []struct {
+		name    string
+		input   string
+		secrets []string
+		want    string
+	}{
+		{name: "secret and compact code", input: "token abc123, tränarkod 123456789012, raid 12345, lång 9123456789012", secrets: []string{"abc123", ""}, want: "token [REDACTED], tränarkod [REDACTED], raid 12345, lång 9123456789012"},
+		{name: "overlapping secrets", input: "prefix-secret prefix", secrets: []string{"prefix", "prefix-secret"}, want: "[REDACTED] [REDACTED]"},
+		{name: "multiple codes", input: "123456789012 234567890123", want: "[REDACTED] [REDACTED]"},
+		{name: "formatted codes", input: "compact (123456789012), spaced: 1234 5678 9012; hyphenated=1234-5678-9012!", want: "compact ([REDACTED]), spaced: [REDACTED]; hyphenated=[REDACTED]!"},
+		{name: "codes inside identifiers", input: "raid123456789012prod code1234 5678 9012prod code1234-5678-9012prod", want: "raid123456789012prod code1234 5678 9012prod code1234-5678-9012prod"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := Redact(testCase.input, testCase.secrets...); got != testCase.want {
+				t.Fatalf("redacted text = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
 
-func TestRedactIsDeterministicForOverlappingSecrets(t *testing.T) {
-	const input = "prefix-secret prefix"
-	first := Redact(input, "prefix", "prefix-secret")
-	second := Redact(input, "prefix-secret", "prefix")
-
-	if first != second {
-		t.Fatalf("redaction depends on secret order: first %q, second %q", first, second)
-	}
-	if first != "[REDACTED] [REDACTED]" {
-		t.Fatalf("redacted text = %q, want both secrets redacted", first)
-	}
-}
-
-func TestRedactMasksEveryStandaloneTrainerCode(t *testing.T) {
-	const input = "123456789012 234567890123"
-	const want = "[REDACTED] [REDACTED]"
-	if got := Redact(input); got != want {
-		t.Fatalf("redacted trainer codes = %q, want %q", got, want)
-	}
-}
-
-func TestRedactMasksFormattedTrainerCodesAtPunctuationBoundaries(t *testing.T) {
-	const input = "compact (123456789012), spaced: 1234 5678 9012; hyphenated=1234-5678-9012!"
-	const want = "compact ([REDACTED]), spaced: [REDACTED]; hyphenated=[REDACTED]!"
-	if got := Redact(input); got != want {
-		t.Fatalf("redacted formatted trainer codes = %q, want %q", got, want)
-	}
-}
-
-func TestRedactLeavesTrainerCodeDigitsInsideIdentifiers(t *testing.T) {
-	const input = "raid123456789012prod code1234 5678 9012prod code1234-5678-9012prod"
-	if got := Redact(input); got != input {
-		t.Fatalf("redacted identifiers = %q, want unchanged %q", got, input)
-	}
-}
-
-func TestHumanRendererWritesSwedishTextToSelectedWriter(t *testing.T) {
+func TestRenderErrorUsesPublicSanitizedError(t *testing.T) {
 	var destination bytes.Buffer
-	renderer := NewHumanRenderer(&destination, "token-value")
-
-	if err := renderer.Info("Söker med token-value"); err != nil {
-		t.Fatalf("render info: %v", err)
+	if err := RenderError(&destination, NewError(CodeNotFound, "Ingen raid för token-value och 123456789012"), "token-value"); err != nil {
+		t.Fatal(err)
 	}
-	if err := renderer.Success("Raid hittad för 123456789012"); err != nil {
-		t.Fatalf("render success: %v", err)
-	}
-	if err := renderer.Error(NewError(CodeNotFound, "Ingen raid för token-value")); err != nil {
-		t.Fatalf("render error: %v", err)
+	const want = "Fel [NOT_FOUND]: Ingen raid för [REDACTED] och [REDACTED]\n"
+	if destination.String() != want {
+		t.Fatalf("output = %q, want %q", destination.String(), want)
 	}
 
-	const want = "Info: Söker med [REDACTED]\nKlart: Raid hittad för [REDACTED]\nFel [NOT_FOUND]: Ingen raid för [REDACTED]\n"
-	if got := destination.String(); got != want {
-		t.Fatalf("human output = %q, want %q", got, want)
+	destination.Reset()
+	if err := RenderError(&destination, errors.New("token=raw-secret")); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestHumanRendererHidesUnknownErrorDetails(t *testing.T) {
-	var destination bytes.Buffer
-	renderer := NewHumanRenderer(&destination)
-
-	if err := renderer.Error(errors.New("token=raw-secret")); err != nil {
-		t.Fatalf("render unknown error: %v", err)
-	}
-
-	const want = "Fel [INTERNAL_ERROR]: Ett oväntat internt fel inträffade.\n"
-	if got := destination.String(); got != want {
-		t.Fatalf("unknown human error = %q, want %q", got, want)
+	const wantUnknown = "Fel [INTERNAL_ERROR]: Ett oväntat internt fel inträffade.\n"
+	if destination.String() != wantUnknown {
+		t.Fatalf("unknown output = %q, want %q", destination.String(), wantUnknown)
 	}
 }

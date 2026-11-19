@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"strings"
 
 	"github.com/albinmedoc/raidnow-cli/internal/cli"
 	"github.com/albinmedoc/raidnow-cli/internal/output"
@@ -25,16 +26,24 @@ func runCommand(arguments []string, stdout, stderr io.Writer, command *cobra.Com
 	command.SetArgs(arguments)
 	command.SetOut(stdout)
 	command.SetErr(stderr)
-	err := command.Execute()
+	executed, err := command.ExecuteC()
 	if err == nil {
 		return output.ExitSuccess
 	}
-	if cli.ErrorUsesJSON(err) {
-		if renderError := output.RenderJSON(stdout, output.NewFailure(cli.ErrorCommand(err), "failed", err, "")); renderError != nil {
+	jsonOutput, _ := command.PersistentFlags().GetBool("json")
+	if jsonOutput {
+		if renderError := output.RenderJSON(stdout, output.NewFailure(commandName(executed, command), "failed", err)); renderError != nil {
 			return 1
 		}
-	} else if renderError := output.NewHumanRenderer(stderr).Error(err); renderError != nil {
+	} else if renderError := output.RenderError(stderr, err); renderError != nil {
 		return 1
 	}
 	return output.ExitCodeFor(err)
+}
+
+func commandName(executed, root *cobra.Command) string {
+	if executed == nil {
+		executed = root
+	}
+	return strings.TrimPrefix(executed.CommandPath(), root.Name()+" ")
 }

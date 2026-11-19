@@ -2,7 +2,7 @@
 
 `raidnow` is a stateless, anonymous command-line client for Raid NOW.
 
-This repository contains a working token bootstrap, the per-invocation trainer-input library, and stateless trainer publishing. It does not store accounts, profiles, tokens, trainer values, or workflow state.
+The usable commands fetch anonymous tokens, publish invocation-scoped trainer information, and print the CLI version. The CLI does not store accounts, profiles, tokens, trainer values, or workflow state.
 
 ## Requirements
 
@@ -43,9 +43,9 @@ When reading `--token-file`, the CLI requires a regular file, reads a bounded va
 
 The form transport is stateless: callers provide the token on each request, and write requests are never retried automatically. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
 
-## Pokémon metadata
+## Internal Pokémon metadata preparation
 
-Pokémon names and image URLs are parsed from Raid NOW's server-rendered `aryPokemon` data when a command needs them. Metadata is never cached or written to disk. If metadata cannot be fetched, commands can fall back to the exact upstream Pokémon/form ID.
+The repository includes an internal parser for Raid NOW's server-rendered `aryPokemon` data in preparation for future read commands. There is no shipped metadata command. Parsed metadata is never cached or written to disk; callers can fall back to the exact upstream Pokémon/form ID when metadata is unavailable.
 
 ## Trainer input
 

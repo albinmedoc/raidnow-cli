@@ -12,17 +12,15 @@ const (
 	invalidTrainerInputMessage = "Ogiltig tränarinmatning."
 )
 
-// TrainerInputFlags owns one command's trainer flag values. Bind a fresh value
-// to each future command that needs trainer identity; no input is read at bind time.
-type TrainerInputFlags struct {
+type trainerInputFlags struct {
 	name     string
 	level    int
 	country  string
 	codeFile string
 }
 
-func BindTrainerInputFlags(command *cobra.Command) *TrainerInputFlags {
-	input := &TrainerInputFlags{}
+func bindTrainerInputFlags(command *cobra.Command) *trainerInputFlags {
+	input := &trainerInputFlags{}
 	flags := command.Flags()
 	flags.StringVar(&input.name, "trainer-name", "", "Trainer name for this invocation")
 	flags.IntVar(&input.level, "trainer-level", 0, "Trainer level for this invocation")
@@ -31,7 +29,7 @@ func BindTrainerInputFlags(command *cobra.Command) *TrainerInputFlags {
 	return input
 }
 
-func (input *TrainerInputFlags) Read(command *cobra.Command) (domain.Trainer, error) {
+func (input *trainerInputFlags) read(command *cobra.Command) (domain.Trainer, error) {
 	if input == nil || command == nil {
 		return domain.Trainer{}, invalidTrainerInputError()
 	}
