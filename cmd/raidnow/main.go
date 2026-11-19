@@ -6,6 +6,7 @@ import (
 
 	"github.com/albinmedoc/raidnow-cli/internal/cli"
 	"github.com/albinmedoc/raidnow-cli/internal/output"
+	"github.com/spf13/cobra"
 )
 
 func main() {
@@ -13,7 +14,14 @@ func main() {
 }
 
 func run(arguments []string, stdout, stderr io.Writer) int {
-	command := cli.NewRootCommand()
+	return runCommand(arguments, stdout, stderr, cli.NewRootCommand())
+}
+
+func runWithOptions(arguments []string, stdout, stderr io.Writer, options cli.RootOptions) int {
+	return runCommand(arguments, stdout, stderr, cli.NewRootCommandWithOptions(options))
+}
+
+func runCommand(arguments []string, stdout, stderr io.Writer, command *cobra.Command) int {
 	command.SetArgs(arguments)
 	command.SetOut(stdout)
 	command.SetErr(stderr)

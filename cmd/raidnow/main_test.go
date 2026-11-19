@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,8 +13,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/cli"
+	"github.com/albinmedoc/raidnow-cli/internal/domain"
+	"github.com/albinmedoc/raidnow-cli/internal/output"
+	"github.com/albinmedoc/raidnow-cli/internal/upstream"
 )
 
 type failFirstWriter struct {
@@ -203,6 +208,7 @@ func TestBinaryMalformedCLIExitsTwoWithoutEchoingRawArguments(t *testing.T) {
 		{name: "subcommand_positional", arguments: []string{"version", secret}},
 		{name: "subcommand_invalid_flag", arguments: []string{"version", "--unknown=" + secret}},
 		{name: "malformed_bool", arguments: []string{"--json=" + secret}},
+		{name: "raw_token", arguments: []string{"--token", secret, "trainer", "publish"}},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -403,7 +409,7 @@ func TestBinaryTokenGetUsesOneStatelessRequestAndPrintsExactOutput(t *testing.T)
 		want      string
 	}{
 		{name: "human", arguments: []string{"token", "get"}, want: token + "\n"},
-		{name: "json", arguments: []string{"--json", "token", "get"}, want: `{"token":"` + token + `"}` + "\n"},
+		{name: "json", arguments: []string{"--json", "token", "get"}, want: `{"ok":true,"command":"token get","status":"secret","data":{"token":"` + token + `","containsSecret":true},"warnings":["Tokenen är hemlig; lagra och dela den säkert."]}` + "\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			workingDirectory := t.TempDir()
@@ -518,6 +524,66 @@ func TestBinaryTokenGetSanitizesUpstreamFailures(t *testing.T) {
 			}
 			if got := requests.Load(); got != 1 {
 				t.Fatalf("request count = %d, want 1 with no follow-up", got)
+			}
+		})
+	}
+}
+
+type mainStubBootstrap struct{}
+
+func (mainStubBootstrap) Token(context.Context) (string, error) { return "unused", nil }
+
+type mainStubPublisher struct{ err error }
+
+func (publisher *mainStubPublisher) PublishTrainer(context.Context, string, domain.Trainer, upstream.CallOptions) error {
+	return publisher.err
+}
+
+func TestRunTrainerPublishExitOutputAndNoSideEffects(t *testing.T) {
+	secrets := t.TempDir()
+	tokenPath := filepath.Join(secrets, "token")
+	codePath := filepath.Join(secrets, "code")
+	if err := os.WriteFile(tokenPath, []byte("opaque-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codePath, []byte("123456789012\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseArgs := []string{"--token-file", tokenPath, "trainer", "publish", "--trainer-name", "Ash123", "--trainer-level", "50", "--trainer-country", "se", "--trainer-code-file", codePath}
+	for _, testCase := range []struct {
+		name      string
+		json      bool
+		publisher *mainStubPublisher
+		wantExit  int
+		wantOut   string
+		wantErr   string
+	}{
+		{name: "human success", publisher: &mainStubPublisher{}, wantOut: "Tränaruppgifterna publicerades.\n"},
+		{name: "json success", json: true, publisher: &mainStubPublisher{}, wantOut: "{\"ok\":true,\"command\":\"trainer publish\",\"status\":\"published\",\"data\":{\"published\":true},\"warnings\":[]}\n"},
+		{name: "human uncertain", publisher: &mainStubPublisher{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret-marker")}, wantExit: 9, wantErr: "Fel [WRITE_OUTCOME_UNKNOWN]: Upstream-anslutningen bröts och skrivningens utfall är okänt.\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			working := t.TempDir()
+			previous, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chdir(working); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Chdir(previous) }()
+			args := append([]string(nil), baseArgs...)
+			if testCase.json {
+				args = append([]string{"--json"}, args...)
+			}
+			var stdout, stderr strings.Builder
+			exit := runWithOptions(args, &stdout, &stderr, cli.RootOptions{Bootstrap: mainStubBootstrap{}, Publisher: testCase.publisher, Config: &cli.RootConfig{RequestTimeout: time.Second}})
+			if exit != testCase.wantExit || stdout.String() != testCase.wantOut || stderr.String() != testCase.wantErr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
+			}
+			entries, err := os.ReadDir(working)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("side effects=%v err=%v", entries, err)
 			}
 		})
 	}

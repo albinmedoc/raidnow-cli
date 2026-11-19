@@ -112,6 +112,37 @@ func TestTrainerInputFlagsReturnSanitizedInvalidInputForMissingCodeFile(t *testi
 	}
 }
 
+func TestRootCommandTreeContainsOnlyStatelessTokenAndTrainerCommands(t *testing.T) {
+	root := NewRootCommand()
+	seen := map[string]bool{}
+	var visit func(*cobra.Command)
+	visit = func(command *cobra.Command) {
+		for _, child := range command.Commands() {
+			seen[child.CommandPath()] = true
+			visit(child)
+		}
+	}
+	visit(root)
+	for _, required := range []string{"raidnow token", "raidnow token get", "raidnow trainer", "raidnow trainer publish"} {
+		if !seen[required] {
+			t.Fatalf("missing command %q; tree=%#v", required, seen)
+		}
+	}
+	for _, forbidden := range []string{"auth", "login", "profile", "import", "export"} {
+		for path := range seen {
+			if strings.Contains(path, " "+forbidden) {
+				t.Fatalf("forbidden command %q in tree", path)
+			}
+		}
+	}
+	if root.PersistentFlags().Lookup("token") != nil {
+		t.Fatal("raw --token flag must not exist")
+	}
+	if root.PersistentFlags().Lookup("request-timeout") == nil {
+		t.Fatal("global --request-timeout flag is missing")
+	}
+}
+
 func TestRootDoesNotExposeTrainerFlagsGlobally(t *testing.T) {
 	command := NewRootCommand()
 	for _, name := range []string{"trainer-name", "trainer-level", "trainer-country", "trainer-code-file"} {

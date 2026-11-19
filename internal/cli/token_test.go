@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/albinmedoc/raidnow-cli/internal/output"
 )
 
 type stubTokenBootstrapper struct {
@@ -97,7 +100,7 @@ func TestTokenGetPrintsExactRawToken(t *testing.T) {
 	}
 }
 
-func TestTokenGetJSONPrintsCompactTokenObject(t *testing.T) {
+func TestTokenGetJSONPrintsExplicitSecretEnvelope(t *testing.T) {
 	bootstrap := &stubTokenBootstrapper{token: "opaque\"token"}
 	var stdout bytes.Buffer
 	command := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap})
@@ -108,8 +111,26 @@ func TestTokenGetJSONPrintsCompactTokenObject(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("execute JSON token get: %v", err)
 	}
-	if got, want := stdout.String(), "{\"token\":\"opaque\\\"token\"}\n"; got != want {
+	if got, want := stdout.String(), "{\"ok\":true,\"command\":\"token get\",\"status\":\"secret\",\"data\":{\"token\":\"opaque\\\"token\",\"containsSecret\":true},\"warnings\":[\"Tokenen är hemlig; lagra och dela den säkert.\"]}\n"; got != want {
 		t.Fatalf("stdout = %q, want exact %q", got, want)
+	}
+}
+
+func TestTokenGetPreservesTypedBootstrapExitCode(t *testing.T) {
+	bootstrap := &stubTokenBootstrapper{err: output.NewError(output.CodeAuthenticationUnsupported, "<html>https://secret.example/ SECRET-TOKEN</html>")}
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: bootstrap})
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"token", "get"})
+	err := command.Execute()
+	if got := output.ExitCodeFor(err); got != output.ExitAuthenticationUnsupported {
+		t.Fatalf("exit = %d, want %d; err=%v", got, output.ExitAuthenticationUnsupported, err)
+	}
+	formatted := fmt.Sprintf("%v %+v %#v", err, err, err)
+	for _, forbidden := range []string{"<html>", "secret.example", "SECRET-TOKEN"} {
+		if strings.Contains(formatted, forbidden) {
+			t.Fatalf("typed bootstrap error leaked %q: %q", forbidden, formatted)
+		}
 	}
 }
 

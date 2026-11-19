@@ -58,7 +58,7 @@ func (client *Client) postForm(ctx context.Context, operation OperationDescripto
 		return nil, transportFailure(operation.Kind(), dispatched.Load())
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		if operation.AllowsEmptyResponse() {
+		if operation.AllowsEmptyResponse() && response.StatusCode == http.StatusOK {
 			return json.RawMessage{}, nil
 		}
 		return nil, upstreamRejection()

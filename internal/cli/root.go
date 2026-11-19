@@ -3,8 +3,10 @@ package cli
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/session"
+	"github.com/albinmedoc/raidnow-cli/internal/upstream"
 	"github.com/spf13/cobra"
 )
 
@@ -16,17 +18,20 @@ var (
 )
 
 type RootConfig struct {
-	TokenFile string
+	TokenFile      string
+	RequestTimeout time.Duration
 }
 
 type RootOptions struct {
 	Bootstrap TokenBootstrapper
+	Publisher TrainerPublisher
 	Config    *RootConfig
 }
 
 func NewRootCommand() *cobra.Command {
 	return NewRootCommandWithOptions(RootOptions{
 		Bootstrap: session.NewBootstrap(http.DefaultClient, BootstrapURL),
+		Publisher: defaultTrainerPublisher(),
 		Config:    &RootConfig{},
 	})
 }
@@ -37,6 +42,9 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	}
 	if options.Config == nil {
 		options.Config = &RootConfig{}
+	}
+	if options.Publisher == nil {
+		options.Publisher = defaultTrainerPublisher()
 	}
 	var jsonOutput bool
 	command := &cobra.Command{
@@ -51,6 +59,7 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	})
 	command.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Write compact JSON output when supported")
 	command.PersistentFlags().StringVar(&options.Config.TokenFile, "token-file", options.Config.TokenFile, "Read the anonymous token from path or - for stdin")
+	command.PersistentFlags().DurationVar(&options.Config.RequestTimeout, "request-timeout", options.Config.RequestTimeout, "Override the upstream request timeout")
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		return command.Help()
 	}
@@ -64,5 +73,14 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 		},
 	})
 	command.AddCommand(newTokenCommand(options.Bootstrap, &jsonOutput))
+	command.AddCommand(newTrainerCommand(options.Publisher, options.Config, &jsonOutput))
 	return command
+}
+
+func defaultTrainerPublisher() TrainerPublisher {
+	publisher, err := upstream.NewClient(upstream.Config{})
+	if err != nil {
+		return nil
+	}
+	return publisher
 }
