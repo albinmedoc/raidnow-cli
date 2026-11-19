@@ -93,6 +93,49 @@ func TestReadTokenInputRejectsDirectoryAndReadErrors(t *testing.T) {
 	}
 }
 
+func TestReadTokenInputRejectsUnixSymlinkWithoutReturningTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix no-follow semantics are not portable to Windows")
+	}
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	const secret = "symlink-target-secret"
+	if err := os.WriteFile(target, []byte(secret), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(directory, "token")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	token, err := ReadTokenInput(link, strings.NewReader("unused"))
+	if err == nil {
+		t.Fatalf("read symlink token = %q, want rejection", token)
+	}
+	if token != "" || strings.Contains(err.Error(), secret) {
+		t.Fatalf("symlink rejection exposed target: token=%q err=%q", token, err)
+	}
+}
+
+func TestReadTokenInputRejectsUnixFileOwnedByAnotherUserWhenChownIsPermitted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix ownership is not portable to Windows")
+	}
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("other-user-secret"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	otherUID := os.Geteuid() + 1
+	if err := os.Chown(path, otherUID, -1); err != nil {
+		t.Skipf("cannot create another-user-owned fixture: %v", err)
+	}
+	defer os.Chown(path, os.Geteuid(), -1)
+
+	if token, err := ReadTokenInput(path, strings.NewReader("unused")); err == nil || token != "" {
+		t.Fatalf("read another-user-owned file: token=%q err=%v, want rejection", token, err)
+	}
+}
+
 func TestReadTokenInputRejectsUnixFilesAccessibleByGroupOrOthers(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permission bits are not portable to Windows")

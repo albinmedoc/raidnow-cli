@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 )
 
@@ -19,19 +18,12 @@ func ReadTokenInput(path string, stdin io.Reader) (string, error) {
 		}
 		reader = stdin
 	} else {
-		var err error
-		file, err = os.Open(path)
+		opened, err := openTokenFile(path)
 		if err != nil {
 			return "", errInvalidTokenInput
 		}
+		file = opened
 		defer file.Close()
-		info, err := file.Stat()
-		if err != nil || info.IsDir() || !info.Mode().IsRegular() {
-			return "", errInvalidTokenInput
-		}
-		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-			return "", errInvalidTokenInput
-		}
 		reader = file
 	}
 

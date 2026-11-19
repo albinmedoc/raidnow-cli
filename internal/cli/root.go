@@ -40,12 +40,14 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	}
 	var jsonOutput bool
 	command := &cobra.Command{
-		Use:   "raidnow",
-		Short: shortDescription,
-		Args:  cobra.NoArgs,
+		Use:           "raidnow",
+		Short:         shortDescription,
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		SilenceUsage:  true,
 	}
 	command.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Write compact JSON output when supported")
-	command.PersistentFlags().StringVar(&options.Config.TokenFile, "token-file", "", "Read the anonymous token from path or - for stdin")
+	command.PersistentFlags().StringVar(&options.Config.TokenFile, "token-file", options.Config.TokenFile, "Read the anonymous token from path or - for stdin")
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		return command.Help()
 	}

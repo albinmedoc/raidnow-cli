@@ -12,20 +12,79 @@ import (
 	"testing"
 )
 
-func TestReadmeProtectsTokenFileBeforeWritingSecret(t *testing.T) {
+func TestReadmeCreatesUniqueOwnerOnlyTokenFileBeforeWritingSecret(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
 		t.Fatalf("read README: %v", err)
 	}
 	contents := string(readme)
-	if !strings.Contains(contents, "(umask 077; raidnow token get > raidnow.token)") {
-		t.Fatalf("README does not create the token file under umask 077 before writing the secret")
+	creation := "token_file=$(mktemp ./raidnow-token.XXXXXX)"
+	ownershipCheck := `[ -O "$token_file" ]`
+	permissionCheck := `[ "$(stat -c '%a' "$token_file")" = 600 ]`
+	write := `raidnow token get > "$token_file"`
+	for _, required := range []string{creation, ownershipCheck, permissionCheck, write, `rm -f -- "$token_file"`} {
+		if !strings.Contains(contents, required) {
+			t.Fatalf("README token-file example does not contain %q", required)
+		}
 	}
-	if strings.Contains(contents, "raidnow token get > raidnow.token && chmod 600 raidnow.token") {
-		t.Fatal("README still writes the token before restricting file permissions")
+	if strings.Index(contents, creation) > strings.Index(contents, write) || strings.Index(contents, permissionCheck) > strings.Index(contents, write) {
+		t.Fatal("README must exclusively create and verify the token file before writing the secret")
 	}
-	if !strings.Contains(contents, "before any secret bytes are written") {
-		t.Fatal("README does not explain why the restrictive umask must be set first")
+	for _, forbidden := range []string{"raidnow token get > raidnow.token", "raidnow token get > ./raidnow-token"} {
+		if strings.Contains(contents, forbidden) {
+			t.Fatalf("README still recommends truncating a predictable path: %q", forbidden)
+		}
+	}
+}
+
+func TestReadmeTokenFileExampleRunsSecurely(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	contents := string(readme)
+	start := strings.Index(contents, "token_file=$(mktemp ./raidnow-token.XXXXXX)")
+	if start < 0 {
+		t.Fatal("README token-file example start is missing")
+	}
+	end := strings.Index(contents[start:], "\n```")
+	if end < 0 {
+		t.Fatal("README token-file example end is missing")
+	}
+	script := contents[start : start+end]
+
+	directory := t.TempDir()
+	fakeRaidnow := filepath.Join(directory, "raidnow")
+	if err := os.WriteFile(fakeRaidnow, []byte("#!/bin/sh\nprintf 'example-secret-token\\n'\n"), 0o700); err != nil {
+		t.Fatalf("write fake raidnow: %v", err)
+	}
+	command := exec.Command("bash", "-c", script)
+	command.Dir = directory
+	command.Env = environmentWith(map[string]string{"PATH": directory + string(os.PathListSeparator) + os.Getenv("PATH")})
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute README token-file example: %v\noutput:\n%s", err, output)
+	}
+	matches, err := filepath.Glob(filepath.Join(directory, "raidnow-token.*"))
+	if err != nil {
+		t.Fatalf("glob token file: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("created token files = %v, want exactly one", matches)
+	}
+	info, err := os.Lstat(matches[0])
+	if err != nil {
+		t.Fatalf("stat token file: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("token file mode = %v, want regular 0600", info.Mode())
+	}
+	content, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read token file: %v", err)
+	}
+	if got, want := string(content), "example-secret-token\n"; got != want {
+		t.Fatalf("token file content = %q, want %q", got, want)
 	}
 }
 
@@ -47,20 +106,44 @@ func TestBinaryWithoutArgumentsPrintsHelpAndSucceeds(t *testing.T) {
 	}
 }
 
-func TestBinaryInvalidCommandExitsNonzero(t *testing.T) {
+func TestBinaryMalformedCLIExitsTwoWithoutEchoingRawArguments(t *testing.T) {
 	binary := buildBinary(t)
-	command := exec.Command(binary, "definitely-not-a-command")
-	output, err := command.CombinedOutput()
-	if err == nil {
-		t.Fatalf("execute invalid command: got nil error, want nonzero exit\noutput:\n%s", output)
+	const secret = "SECRET-RAW-ARGUMENT"
+	testCases := []struct {
+		name      string
+		arguments []string
+	}{
+		{name: "unknown_command", arguments: []string{"unknown-" + secret}},
+		{name: "invalid_flag", arguments: []string{"--unknown=" + secret}},
+		{name: "root_positional", arguments: []string{"--", secret}},
+		{name: "subcommand_positional", arguments: []string{"version", secret}},
+		{name: "malformed_bool", arguments: []string{"--json=" + secret}},
 	}
-
-	exitError, ok := err.(*exec.ExitError)
-	if !ok {
-		t.Fatalf("execute invalid command error type = %T, want *exec.ExitError", err)
-	}
-	if exitError.ExitCode() == 0 {
-		t.Fatalf("invalid command exit code = 0, want nonzero\noutput:\n%s", output)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			command := exec.Command(binary, testCase.arguments...)
+			var stdout strings.Builder
+			var stderr strings.Builder
+			command.Stdout = &stdout
+			command.Stderr = &stderr
+			err := command.Run()
+			if err == nil {
+				t.Fatal("execute malformed CLI: got nil error, want exit 2")
+			}
+			exitError, ok := err.(*exec.ExitError)
+			if !ok || exitError.ExitCode() != 2 {
+				t.Fatalf("malformed CLI exit = %v, want code 2", err)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if got, want := stderr.String(), "Fel [INVALID_ARGUMENTS]: Ogiltiga kommandoradsargument.\n"; got != want {
+				t.Fatalf("stderr = %q, want exact sanitized %q", got, want)
+			}
+			if strings.Contains(stderr.String(), secret) {
+				t.Fatalf("stderr echoed raw argument: %q", stderr.String())
+			}
+		})
 	}
 }
 
@@ -163,7 +246,7 @@ func TestBinaryTokenGetUsesOneStatelessRequestAndPrintsExactOutput(t *testing.T)
 			}
 		}
 		response.Header().Set("Set-Cookie", "session=must-not-be-reused; Path=/")
-		_, _ = response.Write([]byte("data: {gofriend_token: '" + token + "'}"))
+		_, _ = response.Write([]byte("<script>data: {gofriend_token: '" + token + "'}</script>"))
 	}))
 	t.Cleanup(server.Close)
 
@@ -210,6 +293,39 @@ func TestBinaryTokenGetUsesOneStatelessRequestAndPrintsExactOutput(t *testing.T)
 	}
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("request count = %d, want exactly one per invocation", got)
+	}
+}
+
+func TestBinaryTokenGetJSONFailureUsesStableEnvelopeOnStdout(t *testing.T) {
+	const secret = "SECRET-UPSTREAM-CONTENT"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Error(response, secret, http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+	binary := buildBinaryWithBootstrapURL(t, server.URL)
+	command := exec.Command(binary, "--json", "token", "get")
+	var stdout strings.Builder
+	var stderr strings.Builder
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+
+	err := command.Run()
+	if err == nil {
+		t.Fatal("execute failed JSON token get: got nil error, want exit 8")
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 8 {
+		t.Fatalf("JSON token failure exit = %v, want code 8", err)
+	}
+	want := "{\"ok\":false,\"command\":\"token get\",\"status\":\"failed\",\"error\":{\"code\":\"READ_NETWORK_ERROR\",\"message\":\"Kunde inte hämta en anonym token från Raid NOW.\"}}\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want exact %q", stdout.String(), want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if strings.Contains(stdout.String(), secret) {
+		t.Fatalf("JSON failure leaked upstream content: %q", stdout.String())
 	}
 }
 

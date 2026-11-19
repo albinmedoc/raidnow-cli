@@ -26,13 +26,8 @@ func newTokenCommand(bootstrap TokenBootstrapper, jsonOutput *bool) *cobra.Comma
 		RunE: func(command *cobra.Command, _ []string) error {
 			token, err := bootstrap.Token(command.Context())
 			if err != nil {
-				command.Root().SilenceErrors = true
-				command.Root().SilenceUsage = true
 				publicError := output.NewError(output.CodeReadNetwork, "Kunde inte hämta en anonym token från Raid NOW.")
-				if renderError := output.NewHumanRenderer(command.ErrOrStderr()).Error(publicError); renderError != nil {
-					return output.NewError(output.CodeInternal, "Ett oväntat internt fel inträffade.")
-				}
-				return publicError
+				return &CommandError{Command: "token get", Err: publicError}
 			}
 			if *jsonOutput {
 				return json.NewEncoder(command.OutOrStdout()).Encode(struct {

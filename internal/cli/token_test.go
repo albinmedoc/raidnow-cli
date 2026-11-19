@@ -19,6 +19,22 @@ func (stub *stubTokenBootstrapper) Token(context.Context) (string, error) {
 	return stub.token, stub.err
 }
 
+func TestRootPreservesPreconfiguredTokenFileAsFlagDefault(t *testing.T) {
+	config := &RootConfig{TokenFile: "/preconfigured/token"}
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Config: config})
+
+	flag := command.PersistentFlags().Lookup("token-file")
+	if flag == nil {
+		t.Fatal("--token-file flag is missing")
+	}
+	if got, want := flag.DefValue, config.TokenFile; got != want {
+		t.Fatalf("--token-file default = %q, want preconfigured %q", got, want)
+	}
+	if got, want := config.TokenFile, "/preconfigured/token"; got != want {
+		t.Fatalf("configured token file = %q, want preserved %q", got, want)
+	}
+}
+
 func TestTokenFileFlagIsPersistentConfiguredAndIgnoredByTokenGet(t *testing.T) {
 	bootstrap := &stubTokenBootstrapper{token: "fresh-token"}
 	config := &RootConfig{}
@@ -97,7 +113,7 @@ func TestTokenGetJSONPrintsCompactTokenObject(t *testing.T) {
 	}
 }
 
-func TestTokenGetFailureIsSanitizedOnStderrOnly(t *testing.T) {
+func TestTokenGetFailureReturnsSanitizedErrorForCentralRendering(t *testing.T) {
 	secret := "SECRET-TOKEN-CONTENT"
 	bootstrap := &stubTokenBootstrapper{err: errors.New("upstream HTML <html>" + secret + "</html>")}
 	var stdout bytes.Buffer
@@ -114,8 +130,8 @@ func TestTokenGetFailureIsSanitizedOnStderrOnly(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if got, want := stderr.String(), "Fel [READ_NETWORK_ERROR]: Kunde inte hämta en anonym token från Raid NOW.\n"; got != want {
-		t.Fatalf("stderr = %q, want exact %q", got, want)
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want central process renderer to own error output", stderr.String())
 	}
 	if strings.Contains(stderr.String(), secret) || strings.Contains(stderr.String(), "<html>") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("failure leaked secret or HTML: err=%q stderr=%q", err, stderr.String())
