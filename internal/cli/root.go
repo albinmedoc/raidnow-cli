@@ -2,20 +2,40 @@ package cli
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/albinmedoc/raidnow-cli/internal/session"
 	"github.com/spf13/cobra"
 )
 
 const shortDescription = "Search for Raid NOW raids from your terminal"
 
-var Version = "dev"
+var (
+	Version      = "dev"
+	BootstrapURL = session.DefaultBootstrapURL
+)
+
+type RootOptions struct {
+	Bootstrap TokenBootstrapper
+}
 
 func NewRootCommand() *cobra.Command {
+	return NewRootCommandWithOptions(RootOptions{
+		Bootstrap: session.NewBootstrap(http.DefaultClient, BootstrapURL),
+	})
+}
+
+func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
+	if options.Bootstrap == nil {
+		options.Bootstrap = session.NewBootstrap(http.DefaultClient, BootstrapURL)
+	}
+	var jsonOutput bool
 	command := &cobra.Command{
 		Use:   "raidnow",
 		Short: shortDescription,
 		Args:  cobra.NoArgs,
 	}
+	command.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Write compact JSON output when supported")
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		return command.Help()
 	}
@@ -28,5 +48,6 @@ func NewRootCommand() *cobra.Command {
 			return err
 		},
 	})
+	command.AddCommand(newTokenCommand(options.Bootstrap, &jsonOutput))
 	return command
 }

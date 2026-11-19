@@ -19,7 +19,16 @@ go build -o raidnow ./cmd/raidnow
 ```sh
 ./raidnow --help
 ./raidnow version
+./raidnow token get
 ```
+
+Fetch a token into a user-owned file and restrict its permissions immediately:
+
+```sh
+raidnow token get > raidnow.token && chmod 600 raidnow.token
+```
+
+The shell and user own that file. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
 
 Development builds report `dev`. Release builds can inject a version at link time:
 
