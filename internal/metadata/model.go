@@ -1,25 +1,15 @@
 package metadata
 
-import (
-	"fmt"
-	"sort"
-)
+import "sort"
 
-// Entry is an immutable Pokémon metadata value.
+// Entry is a Pokémon metadata value.
 type Entry struct {
-	id       string
-	name     string
-	imageURL string
+	ID       string
+	NameEN   string
+	ImageURL string
 }
 
-func (entry Entry) ID() string       { return entry.id }
-func (entry Entry) Name() string     { return entry.name }
-func (entry Entry) ImageURL() string { return entry.imageURL }
-
-func (entry Entry) String() string   { return "metadata.Entry{redacted}" }
-func (entry Entry) GoString() string { return entry.String() }
-
-// Catalog is an immutable collection keyed by exact upstream Pokémon/form ID.
+// Catalog is a collection keyed by exact upstream Pokémon/form ID.
 type Catalog struct {
 	entries map[string]Entry
 }
@@ -36,11 +26,6 @@ func (catalog Catalog) List() []Entry {
 	for _, entry := range catalog.entries {
 		entries = append(entries, entry)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].id < entries[j].id })
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 	return entries
 }
-
-func (catalog Catalog) String() string {
-	return fmt.Sprintf("metadata.Catalog{entries:%d}", len(catalog.entries))
-}
-func (catalog Catalog) GoString() string { return catalog.String() }

@@ -1,15 +1,10 @@
 package session
 
 import (
-	"bytes"
 	"strconv"
 	"strings"
-	"unicode/utf16"
-	"unicode/utf8"
 
 	"github.com/albinmedoc/raidnow-cli/internal/htmlscript"
-	"github.com/tdewolff/parse/v2"
-	jsparser "github.com/tdewolff/parse/v2/js"
 )
 
 func extractToken(body []byte) (token string, err error) {
@@ -24,300 +19,199 @@ func extractToken(body []byte) (token string, err error) {
 	if parseErr != nil {
 		return "", errBootstrap
 	}
-
 	var candidates []string
 	for _, source := range sources {
-		found, collectErr := candidatesFromScript(source)
-		if collectErr != nil {
+		found, scanErr := tokenCandidates(source)
+		if scanErr != nil {
 			return "", errBootstrap
 		}
 		candidates = append(candidates, found...)
 	}
-	if len(candidates) != 1 || !tokenIsValid(candidates[0]) {
+	if len(candidates) != 1 || !AnonymousTokenIsValid(candidates[0]) {
 		return "", errBootstrap
 	}
 	return candidates[0], nil
 }
 
-func candidatesFromScript(source []byte) ([]string, error) {
-	ast, err := jsparser.Parse(parse.NewInputBytes(source), jsparser.Options{})
-	if err != nil {
-		return nil, errBootstrap
-	}
-	visitor := &vueCandidateVisitor{}
-	jsparser.Walk(visitor, ast)
-	if visitor.err != nil {
-		return nil, errBootstrap
-	}
-	return visitor.tokens, nil
-}
-
-type vueCandidateVisitor struct {
-	tokens []string
-	err    error
-}
-
-func (visitor *vueCandidateVisitor) Enter(node jsparser.INode) jsparser.IVisitor {
-	if visitor.err != nil {
-		return nil
-	}
-	newExpression, ok := node.(*jsparser.NewExpr)
-	if !ok {
-		return visitor
-	}
-	token, candidate, err := tokenFromVueExpression(newExpression)
-	if err != nil {
-		visitor.err = err
-		return nil
-	}
-	if candidate {
-		visitor.tokens = append(visitor.tokens, token)
-	}
-	return visitor
-}
-
-func (visitor *vueCandidateVisitor) Exit(jsparser.INode) {}
-
-func tokenFromVueExpression(expression *jsparser.NewExpr) (string, bool, error) {
-	callee, ok := expression.X.(*jsparser.Var)
-	if !ok || string(callee.Data) != "Vue" || expression.Args == nil || len(expression.Args.List) != 1 || expression.Args.List[0].Rest {
-		return "", false, nil
-	}
-	config, ok := expression.Args.List[0].Value.(*jsparser.ObjectExpr)
-	if !ok {
-		return "", false, nil
-	}
-	dataValue, count, valid := directStaticConfigProperty(config, "data")
-	if !valid || count != 1 {
-		return "", false, nil
-	}
-	data, ok := dataValue.(*jsparser.ObjectExpr)
-	if !ok {
-		return "", false, nil
-	}
-	tokenValue, count, valid := directStaticProperty(data, "gofriend_token")
-	if !valid || count != 1 {
-		return "", false, nil
-	}
-	literal, ok := tokenValue.(*jsparser.LiteralExpr)
-	if !ok || literal.TokenType != jsparser.StringToken {
-		return "", false, nil
-	}
-	token, err := decodeJSStringLiteral(literal.Data)
-	if err != nil {
-		return "", false, errBootstrap
-	}
-	return token, true, nil
-}
-
-func directStaticConfigProperty(object *jsparser.ObjectExpr, wanted string) (jsparser.IExpr, int, bool) {
-	var value jsparser.IExpr
-	count := 0
-	for _, property := range object.List {
-		if property.Spread || property.Init != nil {
-			return nil, 0, false
-		}
-		if property.Name == nil {
-			method, ok := property.Value.(*jsparser.MethodDecl)
-			if !ok || !ordinaryNamedMethodUnrelatedTo(method, wanted) {
-				return nil, 0, false
+func tokenCandidates(source []byte) ([]string, error) {
+	var candidates []string
+	for index := 0; index < len(source); {
+		switch {
+		case source[index] == '/' && index+1 < len(source) && source[index+1] == '/':
+			index = skipLineComment(source, index+2)
+		case source[index] == '/' && index+1 < len(source) && source[index+1] == '*':
+			var ok bool
+			index, ok = skipBlockComment(source, index+2)
+			if !ok {
+				return nil, errBootstrap
 			}
-			continue
-		}
-		if property.Name.IsComputed() {
-			return nil, 0, false
-		}
-		if _, method := property.Value.(*jsparser.MethodDecl); method {
-			return nil, 0, false
-		}
-		name, ok := staticPropertyName(property.Name)
-		if !ok {
-			return nil, 0, false
-		}
-		if name == wanted {
-			count++
-			value = property.Value
-		}
-	}
-	return value, count, true
-}
-
-func ordinaryNamedMethodUnrelatedTo(method *jsparser.MethodDecl, wanted string) bool {
-	if method.Static || method.Async || method.Generator || method.Get || method.Set {
-		return false
-	}
-	if method.Name.Private != nil || method.Name.IsComputed() || bytes.ContainsRune(method.Name.Literal.Data, '\\') {
-		return false
-	}
-	name, ok := staticPropertyName(&method.Name.PropertyName)
-	return ok && name != wanted
-}
-
-func directStaticProperty(object *jsparser.ObjectExpr, wanted string) (jsparser.IExpr, int, bool) {
-	var value jsparser.IExpr
-	count := 0
-	for _, property := range object.List {
-		if property.Spread || property.Name == nil || property.Name.IsComputed() || property.Init != nil {
-			return nil, 0, false
-		}
-		if _, method := property.Value.(*jsparser.MethodDecl); method {
-			return nil, 0, false
-		}
-		name, ok := staticPropertyName(property.Name)
-		if !ok {
-			return nil, 0, false
-		}
-		if name == wanted {
-			count++
-			value = property.Value
-		}
-	}
-	return value, count, true
-}
-
-func staticPropertyName(name *jsparser.PropertyName) (string, bool) {
-	switch name.Literal.TokenType {
-	case jsparser.IdentifierToken:
-		if bytes.ContainsRune(name.Literal.Data, '\\') {
-			return "", false
-		}
-		return string(name.Literal.Data), true
-	case jsparser.StringToken:
-		decoded, err := decodeJSStringLiteral(name.Literal.Data)
-		return decoded, err == nil
-	default:
-		return "", false
-	}
-}
-
-func decodeJSStringLiteral(literal []byte) (string, error) {
-	if len(literal) < 2 || literal[0] != literal[len(literal)-1] || literal[0] != '\'' && literal[0] != '"' {
-		return "", errBootstrap
-	}
-	quote := literal[0]
-	input := literal[1 : len(literal)-1]
-	var decoded strings.Builder
-	for index := 0; index < len(input); {
-		if input[index] != '\\' {
-			r, size := utf8.DecodeRune(input[index:])
-			if r == utf8.RuneError && size == 1 || r == '\n' || r == '\r' || r == '\u2028' || r == '\u2029' {
-				return "", errBootstrap
+		case source[index] == '`':
+			var ok bool
+			index, ok = skipQuoted(source, index, '`')
+			if !ok {
+				return nil, errBootstrap
 			}
-			decoded.WriteRune(r)
-			if decoded.Len() > MaxTokenBytes {
-				return "", errBootstrap
+		case source[index] == '\'' || source[index] == '"':
+			next, ok := skipQuoted(source, index, source[index])
+			if !ok {
+				return nil, errBootstrap
 			}
-			index += size
-			continue
-		}
-		index++
-		if index >= len(input) {
-			return "", errBootstrap
-		}
-		switch input[index] {
-		case '\n':
-			index++
-			continue
-		case '\r':
-			index++
-			if index < len(input) && input[index] == '\n' {
-				index++
-			}
-			continue
-		case '\'', '"', '\\', '/':
-			decoded.WriteByte(input[index])
-			index++
-		case 'b':
-			decoded.WriteByte('\b')
-			index++
-		case 'f':
-			decoded.WriteByte('\f')
-			index++
-		case 'n':
-			decoded.WriteByte('\n')
-			index++
-		case 'r':
-			decoded.WriteByte('\r')
-			index++
-		case 't':
-			decoded.WriteByte('\t')
-			index++
-		case 'v':
-			decoded.WriteByte('\v')
-			index++
-		case '0':
-			if index+1 < len(input) && input[index+1] >= '0' && input[index+1] <= '9' {
-				return "", errBootstrap
-			}
-			decoded.WriteByte(0)
-			index++
-		case 'x':
-			value, next, err := fixedHex(input, index+1, 2)
-			if err != nil {
-				return "", errBootstrap
-			}
-			decoded.WriteRune(rune(value))
-			index = next
-		case 'u':
-			r, next, err := decodeUnicodeEscape(input, index+1)
-			if err != nil {
-				return "", errBootstrap
-			}
-			if utf16.IsSurrogate(r) {
-				if r < 0xD800 || r > 0xDBFF || next+2 > len(input) || input[next] != '\\' || input[next+1] != 'u' {
-					return "", errBootstrap
+			if string(source[index+1:next-1]) == "gofriend_token" {
+				value, after, candidateErr := tokenPropertyValue(source, next)
+				if candidateErr != nil {
+					return nil, errBootstrap
 				}
-				low, afterLow, lowErr := decodeUnicodeEscape(input, next+2)
-				if lowErr != nil || low < 0xDC00 || low > 0xDFFF {
-					return "", errBootstrap
+				if after != next {
+					candidates = append(candidates, value)
+					index = after
+					continue
 				}
-				r = utf16.DecodeRune(r, low)
-				next = afterLow
 			}
-			decoded.WriteRune(r)
 			index = next
-		default:
-			if bytes.HasPrefix(input[index:], []byte{0xE2, 0x80, 0xA8}) || bytes.HasPrefix(input[index:], []byte{0xE2, 0x80, 0xA9}) {
-				index += 3
+		case hasIdentifierAt(source, index, "gofriend_token"):
+			value, next, candidateErr := tokenPropertyValue(source, index+len("gofriend_token"))
+			if candidateErr != nil {
+				return nil, errBootstrap
+			}
+			if next != index+len("gofriend_token") {
+				candidates = append(candidates, value)
+				index = next
 				continue
 			}
-			if input[index] >= '1' && input[index] <= '9' || input[index] == quote {
-				return "", errBootstrap
+			index++
+		default:
+			index++
+		}
+	}
+	return candidates, nil
+}
+
+func tokenPropertyValue(source []byte, index int) (string, int, error) {
+	start := index
+	index = skipSpace(source, index)
+	if index >= len(source) || source[index] != ':' {
+		return "", start, nil
+	}
+	index = skipSpace(source, index+1)
+	if index >= len(source) || source[index] != '\'' && source[index] != '"' {
+		return "", 0, errBootstrap
+	}
+	value, next, err := decodeASCIIJavaScriptString(source, index)
+	if err != nil || !AnonymousTokenIsValid(value) {
+		return "", 0, errBootstrap
+	}
+	return value, next, nil
+}
+
+func decodeASCIIJavaScriptString(source []byte, start int) (string, int, error) {
+	if start >= len(source) || source[start] != '\'' && source[start] != '"' {
+		return "", start, errBootstrap
+	}
+	quote := source[start]
+	var decoded strings.Builder
+	for index := start + 1; index < len(source); index++ {
+		character := source[index]
+		if character == quote {
+			return decoded.String(), index + 1, nil
+		}
+		if character == '\n' || character == '\r' || character > 0x7f {
+			return "", start, errBootstrap
+		}
+		if character != '\\' {
+			decoded.WriteByte(character)
+		} else {
+			index++
+			if index >= len(source) {
+				return "", start, errBootstrap
 			}
-			return "", errBootstrap
+			switch source[index] {
+			case '\'', '"', '\\', '/':
+				decoded.WriteByte(source[index])
+			case 'b':
+				decoded.WriteByte('\b')
+			case 'f':
+				decoded.WriteByte('\f')
+			case 'n':
+				decoded.WriteByte('\n')
+			case 'r':
+				decoded.WriteByte('\r')
+			case 't':
+				decoded.WriteByte('\t')
+			case 'x', 'u':
+				digits := 2
+				if source[index] == 'u' {
+					digits = 4
+				}
+				if index+digits >= len(source) {
+					return "", start, errBootstrap
+				}
+				value, parseErr := strconv.ParseUint(string(source[index+1:index+1+digits]), 16, 8)
+				if parseErr != nil || value > 0x7f {
+					return "", start, errBootstrap
+				}
+				decoded.WriteByte(byte(value))
+				index += digits
+			default:
+				return "", start, errBootstrap
+			}
 		}
 		if decoded.Len() > MaxTokenBytes {
-			return "", errBootstrap
+			return "", start, errBootstrap
 		}
 	}
-	return decoded.String(), nil
+	return "", start, errBootstrap
 }
 
-func decodeUnicodeEscape(input []byte, start int) (rune, int, error) {
-	if start < len(input) && input[start] == '{' {
-		end := bytes.IndexByte(input[start+1:], '}')
-		if end < 0 || end == 0 || end > 6 {
-			return 0, start, errBootstrap
+func skipQuoted(source []byte, start int, quote byte) (int, bool) {
+	for index := start + 1; index < len(source); index++ {
+		if source[index] == '\\' {
+			index++
+			continue
 		}
-		end += start + 1
-		value, err := strconv.ParseUint(string(input[start+1:end]), 16, 32)
-		if err != nil || value > utf8.MaxRune || value >= 0xD800 && value <= 0xDFFF {
-			return 0, start, errBootstrap
+		if source[index] == quote {
+			return index + 1, true
 		}
-		return rune(value), end + 1, nil
 	}
-	value, next, err := fixedHex(input, start, 4)
-	return rune(value), next, err
+	return len(source), false
 }
 
-func fixedHex(input []byte, start, length int) (uint64, int, error) {
-	end := start + length
-	if end > len(input) {
-		return 0, start, errBootstrap
+func skipLineComment(source []byte, index int) int {
+	for index < len(source) && source[index] != '\n' && source[index] != '\r' {
+		index++
 	}
-	value, err := strconv.ParseUint(string(input[start:end]), 16, 32)
-	if err != nil {
-		return 0, start, errBootstrap
+	return index
+}
+
+func skipBlockComment(source []byte, index int) (int, bool) {
+	for index+1 < len(source) {
+		if source[index] == '*' && source[index+1] == '/' {
+			return index + 2, true
+		}
+		index++
 	}
-	return value, end, nil
+	return len(source), false
+}
+
+func skipSpace(source []byte, index int) int {
+	for index < len(source) {
+		switch source[index] {
+		case ' ', '\t', '\n', '\r':
+			index++
+		default:
+			return index
+		}
+	}
+	return index
+}
+
+func hasIdentifierAt(source []byte, index int, identifier string) bool {
+	if index+len(identifier) > len(source) || string(source[index:index+len(identifier)]) != identifier {
+		return false
+	}
+	return (index == 0 || !identifierByte(source[index-1])) &&
+		(index+len(identifier) == len(source) || !identifierByte(source[index+len(identifier)]))
+}
+
+func identifierByte(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '_' || value == '$'
 }
