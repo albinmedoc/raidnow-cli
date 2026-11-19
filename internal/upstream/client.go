@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -59,6 +61,16 @@ func NewClient(config Config) (*Client, error) {
 	parsedEndpoint, err := url.Parse(endpoint)
 	if err != nil || parsedEndpoint.Host == "" || parsedEndpoint.User != nil || parsedEndpoint.Fragment != "" || parsedEndpoint.Opaque != "" {
 		return nil, invalidArguments("Ogiltig transportkonfiguration.")
+	}
+	port := parsedEndpoint.Port()
+	if strings.HasSuffix(parsedEndpoint.Host, ":") {
+		return nil, invalidArguments("Ogiltig transportkonfiguration.")
+	}
+	if port != "" {
+		portNumber, portErr := strconv.ParseUint(port, 10, 16)
+		if portErr != nil || portNumber == 0 {
+			return nil, invalidArguments("Ogiltig transportkonfiguration.")
+		}
 	}
 	if parsedEndpoint.Scheme != "https" && !(parsedEndpoint.Scheme == "http" && config.AllowInsecureHTTP) {
 		return nil, invalidArguments("Ogiltig transportkonfiguration.")

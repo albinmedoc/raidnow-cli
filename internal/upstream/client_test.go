@@ -156,6 +156,55 @@ func TestNewClientValidatesEndpointSafety(t *testing.T) {
 	}
 }
 
+func TestNewClientRejectsInvalidEndpointPorts(t *testing.T) {
+	testCases := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "zero", endpoint: "https://example.com:0/form"},
+		{name: "above maximum", endpoint: "https://example.com:65536/form"},
+		{name: "far above maximum", endpoint: "https://example.com:99999/form"},
+		{name: "non numeric", endpoint: "https://example.com:not-a-port/form"},
+		{name: "empty explicit port", endpoint: "https://example.com:/form"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := NewClient(Config{Endpoint: testCase.endpoint})
+			if got := output.ExitCodeFor(err); got != output.ExitInvalidArguments {
+				t.Fatalf("exit code = %d, want %d; error=%v", got, output.ExitInvalidArguments, err)
+			}
+			formatted := fmt.Sprintf("%v %#v", err, err)
+			if strings.Contains(formatted, testCase.endpoint) || strings.Contains(formatted, "example.com") {
+				t.Fatalf("error formatting leaked endpoint: %s", formatted)
+			}
+		})
+	}
+}
+
+func TestNewClientAcceptsValidEndpointPorts(t *testing.T) {
+	testCases := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "default endpoint", endpoint: ""},
+		{name: "absent port", endpoint: "https://example.com/form"},
+		{name: "minimum port", endpoint: "https://example.com:1/form"},
+		{name: "HTTPS port", endpoint: "https://example.com:443/form"},
+		{name: "maximum port", endpoint: "https://example.com:65535/form"},
+		{name: "IPv4", endpoint: "https://192.0.2.1:443/form"},
+		{name: "bracketed IPv6", endpoint: "https://[2001:db8::1]:443/form"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := NewClient(Config{Endpoint: testCase.endpoint}); err != nil {
+				t.Fatalf("NewClient() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestNewClientAllowsHTTPOnlyWithExplicitOptIn(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		_, _ = response.Write([]byte(`{"ok":true}`))
