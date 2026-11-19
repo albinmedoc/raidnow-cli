@@ -17,12 +17,12 @@ func newTokenCommand(bootstrap TokenBootstrapper, jsonOutput *bool) *cobra.Comma
 	command := &cobra.Command{
 		Use:   "token",
 		Short: "Manage anonymous Raid NOW tokens",
-		Args:  cobra.NoArgs,
+		Args:  usageNoArgs,
 	}
 	command.AddCommand(&cobra.Command{
 		Use:   "get",
 		Short: "Fetch a new anonymous token",
-		Args:  cobra.NoArgs,
+		Args:  usageNoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			token, err := bootstrap.Token(command.Context())
 			if err != nil {

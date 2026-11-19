@@ -395,6 +395,30 @@ func TestExtractTokenRejectsAmbiguousOrDynamicVueObjects(t *testing.T) {
 	}
 }
 
+func TestExtractTokenRejectsEscapedIdentifierAmbiguity(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		script string
+	}{
+		{name: "mixed_data", script: `new Vue({data:{gofriend_token:'first'},d\u0061ta:{gofriend_token:'second'}})`},
+		{name: "escaped_data_only", script: `new Vue({d\u0061ta:{gofriend_token:'secret'}})`},
+		{name: "mixed_token", script: `new Vue({data:{gofriend_token:'first',gofriend_\u0074oken:'second'}})`},
+		{name: "escaped_token_only", script: `new Vue({data:{gofriend_\u0074oken:'secret'}})`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			assertBootstrapRejected(t, []byte(`<script>`+testCase.script+`</script>`))
+		})
+	}
+}
+
+func TestExtractTokenAllowsUnrelatedOrdinaryIdentifiers(t *testing.T) {
+	body := []byte(`<script>new Vue({el:'#app',ordinaryConfig:true,data:{ordinaryData:'value',gofriend_token:'right-token'}})</script>`)
+	token, err := extractToken(body)
+	if err != nil || token != "right-token" {
+		t.Fatalf("token=%q err=%v, want right-token", token, err)
+	}
+}
+
 func TestExtractTokenRequiresExactlyOneCandidateAcrossDocument(t *testing.T) {
 	for _, body := range []string{
 		`<script>new Vue({data:{gofriend_token:'same'}});new Vue({data:{gofriend_token:'same'}})</script>`,
@@ -445,6 +469,13 @@ func TestExtractTokenRejectsMalformedJavaScriptAndEscapes(t *testing.T) {
 	}
 
 	assertBootstrapRejected(t, []byte(`<script>const broken = ;</script><script>new Vue({data:{gofriend_token:'secret'}})</script>`))
+}
+
+func TestDecodeJSStringLiteralRejectsOversizedOrdinaryContent(t *testing.T) {
+	literal := []byte(`'` + strings.Repeat("x", MaxTokenBytes+1) + `'`)
+	if _, err := decodeJSStringLiteral(literal); err == nil {
+		t.Fatal("decode oversized ordinary string: got nil error, want rejection")
+	}
 }
 
 func assertBootstrapRejected(t *testing.T, body []byte) {

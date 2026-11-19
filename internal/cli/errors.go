@@ -1,6 +1,36 @@
 package cli
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/albinmedoc/raidnow-cli/internal/output"
+	"github.com/spf13/cobra"
+)
+
+const invalidArgumentsMessage = "Ogiltiga kommandoradsargument."
+
+type UsageError struct {
+	Err *output.CLIError
+}
+
+func (err *UsageError) Error() string {
+	return err.Err.Error()
+}
+
+func (err *UsageError) Unwrap() error {
+	return err.Err
+}
+
+func newUsageError() error {
+	return &UsageError{Err: output.NewError(output.CodeInvalidArguments, invalidArgumentsMessage)}
+}
+
+func usageNoArgs(_ *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return newUsageError()
+	}
+	return nil
+}
 
 type CommandError struct {
 	Command string

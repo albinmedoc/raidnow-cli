@@ -1,16 +1,33 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/albinmedoc/raidnow-cli/internal/cli"
 )
+
+type failFirstWriter struct {
+	writes int
+	output strings.Builder
+}
+
+func (writer *failFirstWriter) Write(content []byte) (int, error) {
+	writer.writes++
+	if writer.writes == 1 {
+		return 0, errors.New("SECRET-WRITER-FAILURE")
+	}
+	return writer.output.Write(content)
+}
 
 func TestReadmeDocumentsSingleOpenNoclobberTokenSave(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
@@ -41,6 +58,12 @@ func TestReadmeDocumentsSingleOpenNoclobberTokenSave(t *testing.T) {
 }
 
 func TestReadmeTokenFileExampleHasDeterministicNoclobberBehavior(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("README noclobber example is Unix-only")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is unavailable")
+	}
 	script := readmeTokenSaveScript(t)
 	directory := t.TempDir()
 	fakeRaidnow := filepath.Join(directory, "raidnow")
@@ -159,6 +182,7 @@ func TestBinaryMalformedCLIExitsTwoWithoutEchoingRawArguments(t *testing.T) {
 		{name: "invalid_flag", arguments: []string{"--unknown=" + secret}},
 		{name: "root_positional", arguments: []string{"--", secret}},
 		{name: "subcommand_positional", arguments: []string{"version", secret}},
+		{name: "subcommand_invalid_flag", arguments: []string{"version", "--unknown=" + secret}},
 		{name: "malformed_bool", arguments: []string{"--json=" + secret}},
 	}
 	for _, testCase := range testCases {
@@ -186,6 +210,67 @@ func TestBinaryMalformedCLIExitsTwoWithoutEchoingRawArguments(t *testing.T) {
 				t.Fatalf("stderr echoed raw argument: %q", stderr.String())
 			}
 		})
+	}
+}
+
+func TestMalformedCLIWithJSONFlagUsesSanitizedInvalidArgumentsEnvelope(t *testing.T) {
+	const secret = "SECRET-RAW-ARGUMENT"
+	var stdout strings.Builder
+	var stderr strings.Builder
+
+	if exitCode := run([]string{"--json", "unknown-" + secret}, &stdout, &stderr); exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	want := "{\"ok\":false,\"command\":\"raidnow\",\"status\":\"failed\",\"error\":{\"code\":\"INVALID_ARGUMENTS\",\"message\":\"Ogiltiga kommandoradsargument.\"}}\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want exact %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if strings.Contains(stdout.String(), secret) {
+		t.Fatalf("stdout echoed raw argument: %q", stdout.String())
+	}
+}
+
+func TestVersionWriterFailureIsSanitizedInternalError(t *testing.T) {
+	stdout := &failFirstWriter{}
+	var stderr strings.Builder
+
+	if exitCode := run([]string{"version"}, stdout, &stderr); exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if got, want := stderr.String(), "Fel [INTERNAL_ERROR]: Ett oväntat internt fel inträffade.\n"; got != want {
+		t.Fatalf("stderr = %q, want exact %q", got, want)
+	}
+	if strings.Contains(stderr.String(), "SECRET-WRITER-FAILURE") {
+		t.Fatalf("stderr leaked writer error: %q", stderr.String())
+	}
+}
+
+func TestTokenWriterFailureIsSanitizedInternalJSONError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_, _ = response.Write([]byte(`<script>new Vue({data:{gofriend_token:'safe-token'}})</script>`))
+	}))
+	t.Cleanup(server.Close)
+	previousBootstrapURL := cli.BootstrapURL
+	cli.BootstrapURL = server.URL
+	t.Cleanup(func() { cli.BootstrapURL = previousBootstrapURL })
+	stdout := &failFirstWriter{}
+	var stderr strings.Builder
+
+	if exitCode := run([]string{"--json", "token", "get"}, stdout, &stderr); exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	want := "{\"ok\":false,\"command\":\"raidnow\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
+	if got := stdout.output.String(); got != want {
+		t.Fatalf("stdout recovery output = %q, want exact %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if strings.Contains(stdout.output.String(), "SECRET-WRITER-FAILURE") {
+		t.Fatalf("stdout leaked writer error: %q", stdout.output.String())
 	}
 }
 

@@ -182,6 +182,9 @@ func directStaticProperty(object *jsparser.ObjectExpr, wanted string) (jsparser.
 func staticPropertyName(name *jsparser.PropertyName) (string, bool) {
 	switch name.Literal.TokenType {
 	case jsparser.IdentifierToken:
+		if bytes.ContainsRune(name.Literal.Data, '\\') {
+			return "", false
+		}
 		return string(name.Literal.Data), true
 	case jsparser.StringToken:
 		decoded, err := decodeJSStringLiteral(name.Literal.Data)
@@ -205,6 +208,9 @@ func decodeJSStringLiteral(literal []byte) (string, error) {
 				return "", errBootstrap
 			}
 			decoded.WriteRune(r)
+			if decoded.Len() > MaxTokenBytes {
+				return "", errBootstrap
+			}
 			index += size
 			continue
 		}

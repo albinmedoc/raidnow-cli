@@ -21,9 +21,6 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		return output.ExitSuccess
 	}
-	if output.ExitCodeFor(err) == 1 {
-		err = output.NewError(output.CodeInvalidArguments, "Ogiltiga kommandoradsargument.")
-	}
 	jsonOutput, _ := command.PersistentFlags().GetBool("json")
 	if jsonOutput {
 		if renderError := output.RenderJSON(stdout, output.NewFailure(cli.ErrorCommand(err), "failed", err, "")); renderError != nil {

@@ -42,10 +42,13 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use:           "raidnow",
 		Short:         shortDescription,
-		Args:          cobra.NoArgs,
+		Args:          usageNoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
+	command.SetFlagErrorFunc(func(*cobra.Command, error) error {
+		return newUsageError()
+	})
 	command.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Write compact JSON output when supported")
 	command.PersistentFlags().StringVar(&options.Config.TokenFile, "token-file", options.Config.TokenFile, "Read the anonymous token from path or - for stdin")
 	command.RunE = func(command *cobra.Command, _ []string) error {
@@ -54,7 +57,7 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	command.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the raidnow version",
-		Args:  cobra.NoArgs,
+		Args:  usageNoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			_, err := fmt.Fprintf(command.OutOrStdout(), "raidnow %s\n", Version)
 			return err
