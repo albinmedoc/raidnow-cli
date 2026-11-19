@@ -170,6 +170,7 @@ func TestTrainerPublishPropagatesSanitizedPublisherErrors(t *testing.T) {
 	if output.ExitCodeFor(err) != output.ExitWriteOutcomeUnknown || ErrorCommand(err) != "trainer publish" {
 		t.Fatalf("exit=%d command=%q err=%v", output.ExitCodeFor(err), ErrorCommand(err), err)
 	}
+	assertAllFlagsAtDefaults(t, command)
 }
 
 func TestTrainerPublishRedactsAllInvocationValuesFromPublisherErrors(t *testing.T) {

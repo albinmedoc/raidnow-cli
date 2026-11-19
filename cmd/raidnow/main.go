@@ -29,8 +29,7 @@ func runCommand(arguments []string, stdout, stderr io.Writer, command *cobra.Com
 	if err == nil {
 		return output.ExitSuccess
 	}
-	jsonOutput, _ := command.PersistentFlags().GetBool("json")
-	if jsonOutput {
+	if cli.ErrorUsesJSON(err) {
 		if renderError := output.RenderJSON(stdout, output.NewFailure(cli.ErrorCommand(err), "failed", err, "")); renderError != nil {
 			return 1
 		}

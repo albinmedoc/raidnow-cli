@@ -3,19 +3,87 @@ package upstream
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
 )
 
+const (
+	maxJSONDepth = 128
+	maxJSONNodes = 65536
+)
+
 func decodeJSON(raw json.RawMessage) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
+	nodes := 0
+	value, err := decodeJSONValue(decoder, 0, &nodes)
+	if err != nil {
+		return nil, upstreamRejection()
+	}
+	if _, err := decoder.Token(); err != io.EOF {
 		return nil, upstreamRejection()
 	}
 	return value, nil
+}
+
+func decodeJSONValue(decoder *json.Decoder, depth int, nodes *int) (any, error) {
+	if depth > maxJSONDepth || *nodes >= maxJSONNodes {
+		return nil, upstreamRejection()
+	}
+	(*nodes)++
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delimiter, container := token.(json.Delim)
+	if !container {
+		return token, nil
+	}
+	switch delimiter {
+	case '{':
+		object := make(map[string]any)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, upstreamRejection()
+			}
+			if _, duplicate := object[key]; duplicate {
+				return nil, upstreamRejection()
+			}
+			value, err := decodeJSONValue(decoder, depth+1, nodes)
+			if err != nil {
+				return nil, err
+			}
+			object[key] = value
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim('}') {
+			return nil, upstreamRejection()
+		}
+		return object, nil
+	case '[':
+		array := make([]any, 0)
+		for decoder.More() {
+			value, err := decodeJSONValue(decoder, depth+1, nodes)
+			if err != nil {
+				return nil, err
+			}
+			array = append(array, value)
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim(']') {
+			return nil, upstreamRejection()
+		}
+		return array, nil
+	default:
+		return nil, upstreamRejection()
+	}
 }
 
 func decodeQueuePoll(raw json.RawMessage) (domain.QueuePoll, error) {

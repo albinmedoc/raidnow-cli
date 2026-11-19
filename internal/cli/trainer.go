@@ -19,13 +19,16 @@ type TrainerPublisher interface {
 
 func newTrainerCommand(publisher TrainerPublisher, config *RootConfig, jsonOutput *bool) *cobra.Command {
 	command := &cobra.Command{Use: "trainer", Short: "Manage invocation-scoped trainer information", Args: usageNoArgs}
+	command.RunE = withInvocationReset(func(command *cobra.Command, _ []string) error {
+		return command.Help()
+	})
 	publish := &cobra.Command{
 		Use:   "publish",
 		Short: "Publish trainer information for this anonymous session",
 		Args:  usageNoArgs,
 	}
 	trainerInput := BindTrainerInputFlags(publish)
-	publish.RunE = func(command *cobra.Command, _ []string) error {
+	publish.RunE = withInvocationReset(func(command *cobra.Command, _ []string) error {
 		if config == nil || config.RequestTimeout < 0 {
 			return newUsageError()
 		}
@@ -53,7 +56,7 @@ func newTrainerCommand(publisher TrainerPublisher, config *RootConfig, jsonOutpu
 		}
 		_, err = fmt.Fprintln(command.OutOrStdout(), "Tränaruppgifterna publicerades.")
 		return err
-	}
+	})
 	command.AddCommand(publish)
 	return command
 }

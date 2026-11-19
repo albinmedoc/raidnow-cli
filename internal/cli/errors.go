@@ -25,9 +25,9 @@ func newUsageError() error {
 	return &UsageError{Err: output.NewError(output.CodeInvalidArguments, invalidArgumentsMessage)}
 }
 
-func usageNoArgs(_ *cobra.Command, args []string) error {
+func usageNoArgs(command *cobra.Command, args []string) error {
 	if len(args) != 0 {
-		return newUsageError()
+		return finishInvocation(command, newUsageError())
 	}
 	return nil
 }

@@ -63,8 +63,8 @@ func (client *Client) postForm(ctx context.Context, operation OperationDescripto
 		}
 		return nil, upstreamRejection()
 	}
-	if !json.Valid(body) {
-		return nil, upstreamRejection()
+	if _, err := decodeJSON(json.RawMessage(body)); err != nil {
+		return nil, err
 	}
 	return json.RawMessage(bytes.Clone(body)), nil
 }

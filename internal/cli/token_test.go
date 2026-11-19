@@ -51,8 +51,8 @@ func TestTokenFileFlagIsPersistentConfiguredAndIgnoredByTokenGet(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("execute token get with token file configured: %v", err)
 	}
-	if got, want := config.TokenFile, "/definitely/missing/raidnow.token"; got != want {
-		t.Fatalf("configured token file = %q, want %q", got, want)
+	if got, want := config.TokenFile, ""; got != want {
+		t.Fatalf("caller config token file = %q, want unchanged %q", got, want)
 	}
 	if got, want := stdout.String(), "fresh-token\n"; got != want {
 		t.Fatalf("stdout = %q, want exact %q", got, want)

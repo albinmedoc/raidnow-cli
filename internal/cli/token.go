@@ -19,11 +19,14 @@ func newTokenCommand(bootstrap TokenBootstrapper, jsonOutput *bool) *cobra.Comma
 		Short: "Manage anonymous Raid NOW tokens",
 		Args:  usageNoArgs,
 	}
+	command.RunE = withInvocationReset(func(command *cobra.Command, _ []string) error {
+		return command.Help()
+	})
 	command.AddCommand(&cobra.Command{
 		Use:   "get",
 		Short: "Fetch a new anonymous token",
 		Args:  usageNoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
+		RunE: withInvocationReset(func(command *cobra.Command, _ []string) error {
 			token, err := bootstrap.Token(command.Context())
 			if err != nil {
 				code := output.CodeReadNetwork
@@ -42,7 +45,7 @@ func newTokenCommand(bootstrap TokenBootstrapper, jsonOutput *bool) *cobra.Comma
 			}
 			_, err = fmt.Fprintln(command.OutOrStdout(), token)
 			return err
-		},
+		}),
 	})
 	return command
 }
