@@ -2,7 +2,11 @@ module github.com/albinmedoc/raidnow-cli
 
 go 1.27
 
-require github.com/spf13/cobra v1.10.2
+require (
+	github.com/spf13/cobra v1.10.2
+	github.com/tdewolff/parse/v2 v2.25.0
+	golang.org/x/net v0.63.0
+)
 
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

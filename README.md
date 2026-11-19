@@ -22,18 +22,21 @@ go build -o raidnow ./cmd/raidnow
 ./raidnow token get
 ```
 
-Fetch a token into a uniquely created, user-owned file that cannot overwrite or follow an existing path:
+Fetch a token with a single shell open into a new owner-only file:
 
 ```bash
-token_file=$(mktemp ./raidnow-token.XXXXXX) || exit 1
-[ -f "$token_file" ] && [ ! -L "$token_file" ] && [ -O "$token_file" ] || { rm -f -- "$token_file"; exit 1; }
-chmod 600 "$token_file" || { rm -f -- "$token_file"; exit 1; }
-[ "$(stat -c '%a' "$token_file")" = 600 ] || { rm -f -- "$token_file"; exit 1; }
-raidnow token get > "$token_file" || { rm -f -- "$token_file"; exit 1; }
-printf 'Token saved to %s\n' "$token_file"
+token_file=./raidnow.token
+if (umask 077; set -C; exec raidnow token get > "$token_file"); then
+  printf 'Token saved to %s\n' "$token_file"
+else
+  printf 'Token was not saved; remove any partial file explicitly before retrying.\n' >&2
+  exit 1
+fi
 ```
 
-`mktemp` creates a new unpredictable path exclusively, and the ownership and mode checks happen before any secret bytes are written. The command prints the resulting path; remove it when finished with `rm -f -- "$token_file"`. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
+Run this in a user-owned, non-world-writable directory. On supported Bash/POSIX shells, noclobber refuses an existing regular file and a symbolic link to a regular file, and the producer is not started when that destination check fails. If the producer fails after creation, an owner-only partial file can remain; inspect it if appropriate and explicitly remove it before retrying. Shell redirection does not provide a universal special files or `O_NOFOLLOW` guarantee, so choose the destination directory and path yourself rather than treating this snippet as a general secure-file API.
+
+When reading `--token-file` on Unix, the CLI opens the descriptor with no-follow, nonblocking, and no-controlling-terminal flags, then verifies that the opened descriptor is a regular file owned by the effective user and inaccessible to group and others. These descriptor and ownership guarantees are Unix-specific. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
 
 Development builds report `dev`. Release builds can inject a version at link time:
 

@@ -12,38 +12,114 @@ import (
 	"testing"
 )
 
-func TestReadmeCreatesUniqueOwnerOnlyTokenFileBeforeWritingSecret(t *testing.T) {
+func TestReadmeDocumentsSingleOpenNoclobberTokenSave(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
 		t.Fatalf("read README: %v", err)
 	}
 	contents := string(readme)
-	creation := "token_file=$(mktemp ./raidnow-token.XXXXXX)"
-	ownershipCheck := `[ -O "$token_file" ]`
-	permissionCheck := `[ "$(stat -c '%a' "$token_file")" = 600 ]`
-	write := `raidnow token get > "$token_file"`
-	for _, required := range []string{creation, ownershipCheck, permissionCheck, write, `rm -f -- "$token_file"`} {
+	for _, required := range []string{
+		"token_file=./raidnow.token",
+		`umask 077; set -C; exec raidnow token get > "$token_file"`,
+		"user-owned, non-world-writable directory",
+		"existing regular file",
+		"symbolic link to a regular file",
+		"partial file",
+		"explicitly remove",
+		"special files",
+		"O_NOFOLLOW",
+	} {
 		if !strings.Contains(contents, required) {
 			t.Fatalf("README token-file example does not contain %q", required)
 		}
 	}
-	if strings.Index(contents, creation) > strings.Index(contents, write) || strings.Index(contents, permissionCheck) > strings.Index(contents, write) {
-		t.Fatal("README must exclusively create and verify the token file before writing the secret")
-	}
-	for _, forbidden := range []string{"raidnow token get > raidnow.token", "raidnow token get > ./raidnow-token"} {
+	for _, forbidden := range []string{"mktemp", "chmod 600", "stat -c"} {
 		if strings.Contains(contents, forbidden) {
-			t.Fatalf("README still recommends truncating a predictable path: %q", forbidden)
+			t.Fatalf("README still uses check/reopen flow %q", forbidden)
 		}
 	}
 }
 
-func TestReadmeTokenFileExampleRunsSecurely(t *testing.T) {
+func TestReadmeTokenFileExampleHasDeterministicNoclobberBehavior(t *testing.T) {
+	script := readmeTokenSaveScript(t)
+	directory := t.TempDir()
+	fakeRaidnow := filepath.Join(directory, "raidnow")
+	invocations := filepath.Join(directory, "invocations")
+	fake := fmt.Sprintf("#!/bin/sh\nprintf invoked >> %q\nprintf 'example-secret-token\\n'\n", invocations)
+	if err := os.WriteFile(fakeRaidnow, []byte(fake), 0o700); err != nil {
+		t.Fatalf("write fake raidnow: %v", err)
+	}
+	run := func() error {
+		command := exec.Command("bash", "-c", script)
+		command.Dir = directory
+		command.Env = environmentWith(map[string]string{"PATH": directory + string(os.PathListSeparator) + os.Getenv("PATH")})
+		return command.Run()
+	}
+
+	if err := run(); err != nil {
+		t.Fatalf("create token file: %v", err)
+	}
+	tokenPath := filepath.Join(directory, "raidnow.token")
+	info, err := os.Lstat(tokenPath)
+	if err != nil {
+		t.Fatalf("stat token file: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("token file mode = %v, want regular 0600", info.Mode())
+	}
+	content, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("read token file: %v", err)
+	}
+	if got, want := string(content), "example-secret-token\n"; got != want {
+		t.Fatalf("token file content = %q, want %q", got, want)
+	}
+
+	if err := os.WriteFile(tokenPath, []byte("existing\n"), 0o600); err != nil {
+		t.Fatalf("replace token fixture: %v", err)
+	}
+	if err := os.Remove(invocations); err != nil {
+		t.Fatalf("reset invocation marker: %v", err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("existing destination: got success, want noclobber failure")
+	}
+	if got, _ := os.ReadFile(tokenPath); string(got) != "existing\n" {
+		t.Fatalf("existing destination changed to %q", got)
+	}
+	if _, err := os.Stat(invocations); !os.IsNotExist(err) {
+		t.Fatalf("producer invoked for existing destination: %v", err)
+	}
+
+	if err := os.Remove(tokenPath); err != nil {
+		t.Fatalf("remove existing destination: %v", err)
+	}
+	target := filepath.Join(directory, "target")
+	if err := os.WriteFile(target, []byte("target\n"), 0o600); err != nil {
+		t.Fatalf("write symlink target: %v", err)
+	}
+	if err := os.Symlink(target, tokenPath); err != nil {
+		t.Fatalf("create destination symlink: %v", err)
+	}
+	if err := run(); err == nil {
+		t.Fatal("symlink destination: got success, want noclobber failure")
+	}
+	if got, _ := os.ReadFile(target); string(got) != "target\n" {
+		t.Fatalf("symlink target changed to %q", got)
+	}
+	if _, err := os.Stat(invocations); !os.IsNotExist(err) {
+		t.Fatalf("producer invoked for symlink destination: %v", err)
+	}
+}
+
+func readmeTokenSaveScript(t *testing.T) string {
+	t.Helper()
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
 		t.Fatalf("read README: %v", err)
 	}
 	contents := string(readme)
-	start := strings.Index(contents, "token_file=$(mktemp ./raidnow-token.XXXXXX)")
+	start := strings.Index(contents, "token_file=./raidnow.token")
 	if start < 0 {
 		t.Fatal("README token-file example start is missing")
 	}
@@ -51,41 +127,7 @@ func TestReadmeTokenFileExampleRunsSecurely(t *testing.T) {
 	if end < 0 {
 		t.Fatal("README token-file example end is missing")
 	}
-	script := contents[start : start+end]
-
-	directory := t.TempDir()
-	fakeRaidnow := filepath.Join(directory, "raidnow")
-	if err := os.WriteFile(fakeRaidnow, []byte("#!/bin/sh\nprintf 'example-secret-token\\n'\n"), 0o700); err != nil {
-		t.Fatalf("write fake raidnow: %v", err)
-	}
-	command := exec.Command("bash", "-c", script)
-	command.Dir = directory
-	command.Env = environmentWith(map[string]string{"PATH": directory + string(os.PathListSeparator) + os.Getenv("PATH")})
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute README token-file example: %v\noutput:\n%s", err, output)
-	}
-	matches, err := filepath.Glob(filepath.Join(directory, "raidnow-token.*"))
-	if err != nil {
-		t.Fatalf("glob token file: %v", err)
-	}
-	if len(matches) != 1 {
-		t.Fatalf("created token files = %v, want exactly one", matches)
-	}
-	info, err := os.Lstat(matches[0])
-	if err != nil {
-		t.Fatalf("stat token file: %v", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		t.Fatalf("token file mode = %v, want regular 0600", info.Mode())
-	}
-	content, err := os.ReadFile(matches[0])
-	if err != nil {
-		t.Fatalf("read token file: %v", err)
-	}
-	if got, want := string(content), "example-secret-token\n"; got != want {
-		t.Fatalf("token file content = %q, want %q", got, want)
-	}
+	return contents[start : start+end]
 }
 
 func TestBinaryWithoutArgumentsPrintsHelpAndSucceeds(t *testing.T) {
@@ -246,7 +288,7 @@ func TestBinaryTokenGetUsesOneStatelessRequestAndPrintsExactOutput(t *testing.T)
 			}
 		}
 		response.Header().Set("Set-Cookie", "session=must-not-be-reused; Path=/")
-		_, _ = response.Write([]byte("<script>data: {gofriend_token: '" + token + "'}</script>"))
+		_, _ = response.Write([]byte("<script>new Vue({data:{gofriend_token:'" + token + "'}})</script>"))
 	}))
 	t.Cleanup(server.Close)
 

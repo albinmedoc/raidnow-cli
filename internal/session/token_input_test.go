@@ -61,19 +61,23 @@ func TestReadTokenInputReadsDashFromProvidedStdin(t *testing.T) {
 func TestReadTokenInputRejectsInvalidContent(t *testing.T) {
 	testCases := []struct {
 		name    string
-		content string
+		content []byte
 	}{
 		{name: "empty"},
-		{name: "whitespace_only", content: " \t \n"},
-		{name: "embedded_newline", content: "part1\npart2"},
-		{name: "second_terminal_newline", content: "token\n\n"},
-		{name: "embedded_cr", content: "part1\rpart2"},
-		{name: "nul", content: "part1\x00part2"},
-		{name: "oversized", content: strings.Repeat("x", MaxTokenBytes+1)},
+		{name: "whitespace_only", content: []byte(" 	 \n")},
+		{name: "embedded_newline", content: []byte("part1\npart2")},
+		{name: "second_terminal_newline", content: []byte("token\n\n")},
+		{name: "embedded_cr", content: []byte("part1\rpart2")},
+		{name: "nul", content: []byte("part1\x00part2")},
+		{name: "invalid_utf8", content: []byte{0xff}},
+		{name: "unicode_control", content: []byte("part\u0085part")},
+		{name: "line_separator", content: []byte("part\u2028part")},
+		{name: "paragraph_separator", content: []byte("part\u2029part")},
+		{name: "oversized", content: []byte(strings.Repeat("x", MaxTokenBytes+1))},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := ReadTokenInput("-", strings.NewReader(testCase.content))
+			_, err := ReadTokenInput("-", bytes.NewReader(testCase.content))
 			if err == nil {
 				t.Fatal("read invalid token: got nil error, want rejection")
 			}

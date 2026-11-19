@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strings"
 )
 
 var errInvalidTokenInput = errors.New("invalid token input")
@@ -37,11 +36,9 @@ func ReadTokenInput(path string, stdin io.Reader) (string, error) {
 			content = content[:len(content)-1]
 		}
 	}
-	if len(content) == 0 || len(content) > MaxTokenBytes || strings.TrimSpace(string(content)) == "" {
+	value := string(content)
+	if !tokenIsValid(value) {
 		return "", errInvalidTokenInput
 	}
-	if strings.ContainsAny(string(content), "\r\n\x00") {
-		return "", errInvalidTokenInput
-	}
-	return string(content), nil
+	return value, nil
 }
