@@ -49,7 +49,7 @@ type Trainer struct {
 }
 
 func NewTrainer(name, code string, level int, country string) (Trainer, error) {
-	if !utf8.ValidString(name) {
+	if hasUnsafeTrainerText(name) {
 		return Trainer{}, invalid(ValidationFieldName)
 	}
 	name = strings.TrimSpace(name)
@@ -57,7 +57,7 @@ func NewTrainer(name, code string, level int, country string) (Trainer, error) {
 		return Trainer{}, invalid(ValidationFieldName)
 	}
 
-	if !utf8.ValidString(code) {
+	if hasUnsafeTrainerText(code) {
 		return Trainer{}, invalid(ValidationFieldCode)
 	}
 	code = strings.Map(func(r rune) rune {
@@ -74,20 +74,27 @@ func NewTrainer(name, code string, level int, country string) (Trainer, error) {
 		return Trainer{}, invalid(ValidationFieldLevel)
 	}
 
-	if !utf8.ValidString(country) {
+	if hasUnsafeTrainerText(country) {
 		return Trainer{}, invalid(ValidationFieldCountry)
 	}
 	country = strings.ToLower(strings.TrimSpace(country))
 	if country == "" || len(country) > MaxCountryBytes {
 		return Trainer{}, invalid(ValidationFieldCountry)
 	}
-	for _, r := range country {
-		if unicode.IsControl(r) {
-			return Trainer{}, invalid(ValidationFieldCountry)
-		}
-	}
 
 	return Trainer{name: name, code: code, level: level, country: country}, nil
+}
+
+func hasUnsafeTrainerText(value string) bool {
+	if !utf8.ValidString(value) {
+		return true
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) || r == '\u2028' || r == '\u2029' {
+			return true
+		}
+	}
+	return false
 }
 
 func isASCIIAlphanumeric(value string) bool {

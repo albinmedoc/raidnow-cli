@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewTrainerNormalizesInvocationValues(t *testing.T) {
-	trainer, err := NewTrainer("  Ash123  ", "1234\u20035678\u00a09012", 80, "  WORLD  ")
+	trainer, err := NewTrainer("\u3000Ash123\u3000", "1234 5678\u30009012", 80, "\u3000WORLD\u3000")
 	if err != nil {
 		t.Fatalf("NewTrainer: %v", err)
 	}
@@ -24,6 +24,65 @@ func TestNewTrainerNormalizesInvocationValues(t *testing.T) {
 	}
 	if got, want := trainer.CountryFormValue(), "world"; got != want {
 		t.Fatalf("country = %q, want %q", got, want)
+	}
+}
+
+func TestNewTrainerRejectsUnsafeRunesBeforeNormalization(t *testing.T) {
+	unsafeRunes := []struct {
+		name  string
+		value string
+	}{
+		{name: "lf", value: "\n"},
+		{name: "cr", value: "\r"},
+		{name: "tab", value: "	"},
+		{name: "next_line", value: "\u0085"},
+		{name: "line_separator", value: "\u2028"},
+		{name: "paragraph_separator", value: "\u2029"},
+		{name: "right_to_left_override", value: "\u202e"},
+	}
+	fields := []struct {
+		name  string
+		field ValidationField
+		build func(string) (Trainer, error)
+	}{
+		{name: "name", field: ValidationFieldName, build: func(unsafe string) (Trainer, error) {
+			return NewTrainer(unsafe+"Ash123"+unsafe, "123456789012", 1, "se")
+		}},
+		{name: "code", field: ValidationFieldCode, build: func(unsafe string) (Trainer, error) {
+			return NewTrainer("Ash123", "1234"+unsafe+"56789012", 1, "se")
+		}},
+		{name: "country", field: ValidationFieldCountry, build: func(unsafe string) (Trainer, error) {
+			return NewTrainer("Ash123", "123456789012", 1, unsafe+"se"+unsafe)
+		}},
+	}
+
+	for _, field := range fields {
+		for _, unsafeRune := range unsafeRunes {
+			t.Run(field.name+"/"+unsafeRune.name, func(t *testing.T) {
+				_, err := field.build(unsafeRune.value)
+				if err == nil {
+					t.Fatal("NewTrainer: got nil error, want rejection")
+				}
+				var validationError *ValidationError
+				if !errors.As(err, &validationError) || validationError.Field() != field.field {
+					t.Fatalf("error = %v, want sanitized %q validation error", err, field.field)
+				}
+				encodedError, marshalErr := json.Marshal(err)
+				if marshalErr != nil {
+					t.Fatalf("marshal error: %v", marshalErr)
+				}
+				for label, rendered := range map[string]string{
+					"percent-v":       fmt.Sprintf("%v", err),
+					"percent-plus-v":  fmt.Sprintf("%+v", err),
+					"percent-sharp-v": fmt.Sprintf("%#v", err),
+					"json":            string(encodedError),
+				} {
+					if strings.Contains(rendered, unsafeRune.value) || strings.Contains(rendered, "123456789012") {
+						t.Fatalf("%s error formatting leaked input: %q", label, rendered)
+					}
+				}
+			})
+		}
 	}
 }
 
