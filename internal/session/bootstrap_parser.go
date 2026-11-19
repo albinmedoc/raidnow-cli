@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"mime"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -39,7 +40,7 @@ func collectScriptCandidates(node *html.Node, inTemplate bool, candidates *[]str
 	if node.Type == html.ElementNode && node.Data == "template" {
 		inTemplate = true
 	}
-	if !inTemplate && node.Type == html.ElementNode && node.Data == "script" && executableInlineScript(node) {
+	if !inTemplate && node.Type == html.ElementNode && node.Namespace == "" && node.Data == "script" && executableInlineScript(node) {
 		var source strings.Builder
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
 			if child.Type == html.TextNode {
@@ -64,14 +65,21 @@ func executableInlineScript(node *html.Node) bool {
 	scriptType := ""
 	for _, attribute := range node.Attr {
 		switch attribute.Key {
-		case "src":
+		case "src", "href":
 			return false
 		case "type":
-			scriptType = strings.ToLower(strings.TrimSpace(attribute.Val))
+			scriptType = strings.TrimSpace(attribute.Val)
 		}
 	}
-	switch scriptType {
-	case "", "text/javascript", "application/javascript", "module":
+	if scriptType == "" || strings.EqualFold(scriptType, "module") {
+		return true
+	}
+	mediaType, _, err := mime.ParseMediaType(scriptType)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(mediaType) {
+	case "text/javascript", "application/javascript", "text/ecmascript", "application/ecmascript":
 		return true
 	default:
 		return false

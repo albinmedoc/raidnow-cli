@@ -311,8 +311,13 @@ func TestExtractTokenVisitsOnlyExecutableInlineScriptsOutsideTemplates(t *testin
 		{name: "space_after_open_angle", body: `< script>` + valid + `</script>`},
 		{name: "script_prefix", body: `<scriptx>` + valid + `</scriptx>`},
 		{name: "template_ancestor", body: `<template><div><script>` + valid + `</script></div></template>`},
+		{name: "mathml_namespace", body: `<math><script>` + valid + `</script></math>`},
+		{name: "svg_namespace", body: `<svg><script>` + valid + `</script></svg>`},
 		{name: "src_attribute", body: `<script src="app.js">` + valid + `</script>`},
+		{name: "href_attribute", body: `<script href="app.js">` + valid + `</script>`},
+		{name: "svg_namespaced_href_attribute", body: `<svg><script xlink:href="app.js">` + valid + `</script></svg>`},
 		{name: "non_javascript_type", body: `<script type="application/json">` + valid + `</script>`},
+		{name: "malformed_javascript_type", body: `<script type="text/javascript; charset">` + valid + `</script>`},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -320,9 +325,23 @@ func TestExtractTokenVisitsOnlyExecutableInlineScriptsOutsideTemplates(t *testin
 		})
 	}
 
-	for _, scriptType := range []string{"", ` type=""`, ` type="text/javascript"`, ` type="application/javascript"`, ` type="module"`} {
-		t.Run("executable_"+scriptType, func(t *testing.T) {
-			token, err := extractToken([]byte(`<script` + scriptType + `>` + valid + `</script>`))
+	executableTypes := []struct {
+		name      string
+		attribute string
+	}{
+		{name: "absent", attribute: ""},
+		{name: "empty", attribute: ` type=""`},
+		{name: "module", attribute: ` type="module"`},
+		{name: "text_javascript", attribute: ` type="text/javascript"`},
+		{name: "parameterized_text_javascript", attribute: ` type="text/javascript; charset=utf-8"`},
+		{name: "application_javascript", attribute: ` type="application/javascript"`},
+		{name: "text_ecmascript", attribute: ` type="text/ecmascript"`},
+		{name: "application_ecmascript", attribute: ` type="application/ecmascript"`},
+		{name: "case_insensitive", attribute: ` type="Text/JavaScript; Charset=UTF-8"`},
+	}
+	for _, testCase := range executableTypes {
+		t.Run("executable_"+testCase.name, func(t *testing.T) {
+			token, err := extractToken([]byte(`<script` + testCase.attribute + `>` + valid + `</script>`))
 			if err != nil || token != "right-token" {
 				t.Fatalf("token=%q err=%v, want executable inline script", token, err)
 			}
