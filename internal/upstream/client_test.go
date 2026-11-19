@@ -135,6 +135,10 @@ func TestNewClientValidatesEndpointSafety(t *testing.T) {
 		allowHTTP bool
 	}{
 		{name: "empty host", endpoint: "https://"},
+		{name: "empty HTTPS hostname with port", endpoint: "https://:443/form"},
+		{name: "empty HTTPS hostname with empty port", endpoint: "https://:/form"},
+		{name: "empty HTTP hostname with port", endpoint: "http://:443/form", allowHTTP: true},
+		{name: "empty HTTP hostname with empty port", endpoint: "http://:/form", allowHTTP: true},
 		{name: "malformed", endpoint: "https://example.com/%zz"},
 		{name: "unsupported scheme", endpoint: "ftp://example.com/form"},
 		{name: "userinfo", endpoint: "https://user:secret@example.com/form"},

@@ -59,7 +59,7 @@ func NewClient(config Config) (*Client, error) {
 		endpoint = DefaultEndpoint
 	}
 	parsedEndpoint, err := url.Parse(endpoint)
-	if err != nil || parsedEndpoint.Host == "" || parsedEndpoint.User != nil || parsedEndpoint.Fragment != "" || parsedEndpoint.Opaque != "" {
+	if err != nil || parsedEndpoint.Hostname() == "" || parsedEndpoint.User != nil || parsedEndpoint.Fragment != "" || parsedEndpoint.Opaque != "" {
 		return nil, invalidArguments("Ogiltig transportkonfiguration.")
 	}
 	port := parsedEndpoint.Port()
