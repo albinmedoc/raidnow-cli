@@ -6,7 +6,9 @@ import (
 	"unicode/utf8"
 )
 
-func tokenIsValid(value string) bool {
+// AnonymousTokenIsValid applies the shared anonymous-token contract used by
+// bootstrap, protected file input, and every upstream invocation.
+func AnonymousTokenIsValid(value string) bool {
 	if !utf8.ValidString(value) || len(value) == 0 || len(value) > MaxTokenBytes || strings.TrimSpace(value) == "" {
 		return false
 	}
@@ -16,4 +18,8 @@ func tokenIsValid(value string) bool {
 		}
 	}
 	return true
+}
+
+func tokenIsValid(value string) bool {
+	return AnonymousTokenIsValid(value)
 }

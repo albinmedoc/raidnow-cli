@@ -14,6 +14,10 @@ func writeOutcomeUnknown() error {
 	return output.NewError(output.CodeWriteOutcomeUnknown, "Upstream-anslutningen bröts och skrivningens utfall är okänt.")
 }
 
+func authenticationUnsupported() error {
+	return output.NewError(output.CodeAuthenticationUnsupported, "Den anonyma upstream-sessionen har upphört och måste hämtas på nytt.")
+}
+
 func upstreamRejection() error {
 	return output.NewError(output.CodeUpstreamRejection, "Upstream avvisade begäran eller returnerade ett ogiltigt svar.")
 }
