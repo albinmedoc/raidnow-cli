@@ -40,6 +40,12 @@ When reading `--token-file` on Unix, the CLI opens the descriptor with no-follow
 
 The form transport is stateless: callers provide the token on each request, and write requests are never retried automatically.
 
+## Metadata cache
+
+The Pokémon metadata cache uses the platform user-cache directory (or an absolute `XDG_CACHE_HOME` on supported systems). Every existing path component is checked without following symbolic links; Windows reparse points are rejected. On Unix, an existing cache directory must be owned by the effective user and must not be group- or world-writable. Newly created Unix cache directories are set to `0700` through a no-follow directory descriptor and cache files to `0600`. Windows does not provide portable Unix owner/mode semantics through Go, so directory access remains governed by the user's ACL while reparse-point and file-handle identity checks are still enforced.
+
+Cache reads consume bytes only from a no-follow descriptor validated as a regular file. Writes use an owner-only temporary file, verify that its open descriptor still names the temporary directory entry, and atomically replace the cache; interrupted or adversarial replacement leaves the prior cache intact.
+
 ## Trainer input
 
 Commands that need trainer identity will bind invocation-local `--trainer-name`, `--trainer-level`, `--trainer-country`, and `--trainer-code-file <path|->` flags. They validate the values only when that command runs and keep the normalized trainer identity in process memory. Country values are normalized to lowercase and bounded to 16 UTF-8 bytes without imposing a fixed country catalog.

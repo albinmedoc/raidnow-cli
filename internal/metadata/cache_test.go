@@ -15,9 +15,18 @@ import (
 	"github.com/albinmedoc/raidnow-cli/internal/output"
 )
 
+func cacheTestDir(t *testing.T) string {
+	t.Helper()
+	dir := (*testing.T).TempDir(t)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestCachePathUsesAbsoluteXDGAndOverride(t *testing.T) {
-	xdg := t.TempDir()
-	override := t.TempDir()
+	xdg := cacheTestDir(t)
+	override := cacheTestDir(t)
 
 	got, err := CachePath(Options{CacheDir: override})
 	if err != nil {
@@ -59,6 +68,59 @@ func TestCachePathUsesAbsoluteXDGAndOverride(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsSymlinkedCacheDirectoryComponentsWithoutChangingTarget(t *testing.T) {
+	catalog := testCatalog(t, `{"id":{"en":"Name"}}`)
+	for _, tc := range []struct {
+		name    string
+		options func(string) Options
+	}{
+		{name: "override", options: func(link string) Options { return Options{CacheDir: filepath.Join(link, "raidnow")} }},
+		{name: "default XDG", options: func(link string) Options {
+			t.Setenv("XDG_CACHE_HOME", link)
+			return Options{}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := cacheTestDir(t)
+			target := filepath.Join(root, "target")
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(target, "marker")
+			if err := os.WriteFile(marker, []byte("unchanged"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(root, "cache-link")
+			if err := os.Symlink(target, link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			beforeInfo, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = Resolve(context.Background(), func(context.Context) (Catalog, error) { return catalog, nil }, tc.options(link))
+			if got := output.ExitCodeFor(err); got != 10 {
+				t.Fatalf("exit = %d, want 10; err=%v", got, err)
+			}
+			afterInfo, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if afterInfo.Mode() != beforeInfo.Mode() {
+				t.Fatalf("target mode changed from %v to %v", beforeInfo.Mode(), afterInfo.Mode())
+			}
+			bytes, err := os.ReadFile(marker)
+			if err != nil || string(bytes) != "unchanged" {
+				t.Fatalf("target marker = %q, %v", bytes, err)
+			}
+			if _, err := os.Lstat(filepath.Join(target, "raidnow")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("target gained cache directory: %v", err)
+			}
+		})
+	}
+}
+
 func TestResolvePersistsRefreshThenFreshHitSkipsFetcher(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	catalog := testCatalog(t, `{"25":{"en":"Pikachu","image":"https://example.invalid/25.png"}}`)
@@ -67,7 +129,7 @@ func TestResolvePersistsRefreshThenFreshHitSkipsFetcher(t *testing.T) {
 		calls++
 		return catalog, nil
 	}
-	options := Options{CacheDir: t.TempDir(), Now: func() time.Time { return now }}
+	options := Options{CacheDir: cacheTestDir(t), Now: func() time.Time { return now }}
 
 	first, err := Resolve(context.Background(), fetch, options)
 	if err != nil {
@@ -105,7 +167,7 @@ func TestResolveRefreshPoliciesAndCutoff(t *testing.T) {
 	newCatalog := testCatalog(t, `{"new":{"en":"New"}}`)
 
 	t.Run("stale refresh", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := cacheTestDir(t)
 		now := base
 		if _, err := Resolve(context.Background(), func(context.Context) (Catalog, error) { return oldCatalog, nil }, Options{CacheDir: dir, Now: func() time.Time { return now }}); err != nil {
 			t.Fatal(err)
@@ -121,7 +183,7 @@ func TestResolveRefreshPoliciesAndCutoff(t *testing.T) {
 	})
 
 	t.Run("forced refresh", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := cacheTestDir(t)
 		now := base
 		_, _ = Resolve(context.Background(), func(context.Context) (Catalog, error) { return oldCatalog, nil }, Options{CacheDir: dir, Now: func() time.Time { return now }})
 		result, err := Resolve(context.Background(), func(context.Context) (Catalog, error) { return newCatalog, nil }, Options{CacheDir: dir, Now: func() time.Time { return now }, Force: true})
@@ -143,7 +205,7 @@ func TestResolveRefreshPoliciesAndCutoff(t *testing.T) {
 		{name: "fresh only", age: 2 * 24 * time.Hour, freshOnly: true, wantExit: 11},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := cacheTestDir(t)
 			now := base
 			_, _ = Resolve(context.Background(), func(context.Context) (Catalog, error) { return oldCatalog, nil }, Options{CacheDir: dir, Now: func() time.Time { return now }})
 			now = base.Add(tc.age)
@@ -161,6 +223,49 @@ func TestResolveRefreshPoliciesAndCutoff(t *testing.T) {
 				t.Fatalf("exit = %d, want %d; err=%v", got, tc.wantExit, err)
 			}
 		})
+	}
+}
+
+func TestSecureCacheReadDoesNotFollowFileSwappedToSymlink(t *testing.T) {
+	dir := cacheTestDir(t)
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	original := testCatalog(t, `{"original":{"en":"Original"}}`)
+	targetCatalog := testCatalog(t, `{"target":{"en":"Target"}}`)
+	originalBytes, _, err := encodeCache(original, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetBytes, _, err := encodeCache(targetCatalog, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, cacheFilename)
+	target := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(path, originalBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, targetBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(dir, "original.json")
+
+	_, err = Resolve(context.Background(), nil, Options{
+		CacheDir: dir,
+		Now:      func() time.Time { return now },
+		beforeCacheOpen: func(observedPath string) {
+			if observedPath != path {
+				t.Fatalf("observed path = %q, want %q", observedPath, path)
+			}
+			if renameErr := os.Rename(path, backup); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if symlinkErr := os.Symlink(target, path); symlinkErr != nil {
+				t.Skipf("symlinks unavailable: %v", symlinkErr)
+			}
+		},
+	})
+	if got := output.ExitCodeFor(err); got != 10 {
+		t.Fatalf("exit = %d, want 10; err=%v", got, err)
 	}
 }
 
@@ -202,7 +307,7 @@ func TestCacheStrictDecodeAndRecovery(t *testing.T) {
 		t.Fatalf("oversize error = %v", err)
 	}
 
-	dir := t.TempDir()
+	dir := cacheTestDir(t)
 	path := filepath.Join(dir, cacheFilename)
 	if err := os.WriteFile(path, []byte(`corrupt SECRET-ID SECRET-NAME https://secret.invalid`), 0o600); err != nil {
 		t.Fatal(err)
@@ -217,7 +322,7 @@ func TestCacheStrictDecodeAndRecovery(t *testing.T) {
 }
 
 func TestSuspiciousEmptyRefreshDoesNotReplaceEligibleCache(t *testing.T) {
-	dir := t.TempDir()
+	dir := cacheTestDir(t)
 	now := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	catalog := testCatalog(t, `{"id":{"en":"Name"}}`)
 	_, _ = Resolve(context.Background(), func(context.Context) (Catalog, error) { return catalog, nil }, Options{CacheDir: dir, Now: func() time.Time { return now }})
@@ -262,7 +367,7 @@ func TestDeterministicEncodingPreservesExactForms(t *testing.T) {
 }
 
 func TestAtomicFailuresKeepOldBytesAndCleanTemps(t *testing.T) {
-	dir := t.TempDir()
+	dir := cacheTestDir(t)
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	oldCatalog := testCatalog(t, `{"old":{"en":"Old"}}`)
 	newCatalog := testCatalog(t, `{"new":{"en":"New"}}`)
@@ -296,6 +401,53 @@ func TestAtomicFailuresKeepOldBytesAndCleanTemps(t *testing.T) {
 	}
 }
 
+func TestTempPathReplacementWithSymlinkIsRejectedAndOldCacheSurvives(t *testing.T) {
+	dir := cacheTestDir(t)
+	now := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
+	oldCatalog := testCatalog(t, `{"old":{"en":"Old"}}`)
+	newCatalog := testCatalog(t, `{"new":{"en":"New"}}`)
+	if _, err := Resolve(context.Background(), func(context.Context) (Catalog, error) { return oldCatalog, nil }, Options{CacheDir: dir, Now: func() time.Time { return now }}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, cacheFilename)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("target unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Resolve(context.Background(), func(context.Context) (Catalog, error) { return newCatalog, nil }, Options{
+		CacheDir: dir,
+		Now:      func() time.Time { return now.Add(time.Hour) },
+		Force:    true,
+		beforeReplaceTemp: func(tempName string) {
+			if removeErr := os.Remove(tempName); removeErr != nil {
+				t.Fatal(removeErr)
+			}
+			if symlinkErr := os.Symlink(target, tempName); symlinkErr != nil {
+				t.Skipf("symlinks unavailable: %v", symlinkErr)
+			}
+		},
+	})
+	if got := output.ExitCodeFor(err); got != 10 {
+		t.Fatalf("exit = %d, want 10; err=%v", got, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("old cache changed: %v", err)
+	}
+	targetBytes, err := os.ReadFile(target)
+	if err != nil || string(targetBytes) != "target unchanged" {
+		t.Fatalf("target changed: %q, %v", targetBytes, err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("cache destination became unsafe: %v, %v", info, err)
+	}
+}
+
 func TestUnsafeFilesAndLockContentionMapToLocalPersistence(t *testing.T) {
 	catalog := testCatalog(t, `{"id":{"en":"Name"}}`)
 	for _, tc := range []struct {
@@ -306,7 +458,7 @@ func TestUnsafeFilesAndLockContentionMapToLocalPersistence(t *testing.T) {
 		{name: "nonregular", make: func(path string) error { return os.Mkdir(path, 0o700) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := cacheTestDir(t)
 			path := filepath.Join(dir, cacheFilename)
 			if err := tc.make(path); err != nil {
 				t.Skipf("not portable: %v", err)
@@ -318,9 +470,9 @@ func TestUnsafeFilesAndLockContentionMapToLocalPersistence(t *testing.T) {
 		})
 	}
 
-	dir := t.TempDir()
+	dir := cacheTestDir(t)
 	lockPath := filepath.Join(dir, cacheFilename+".lock")
-	unlock, lockErr := acquireLock(lockPath, withDefaults(Options{LockTimeout: time.Second}))
+	unlock, lockErr := acquireLock(context.Background(), lockPath, withDefaults(Options{LockTimeout: time.Second}))
 	if lockErr != nil {
 		t.Fatalf("acquire first lock: %v", lockErr)
 	}
@@ -331,10 +483,46 @@ func TestUnsafeFilesAndLockContentionMapToLocalPersistence(t *testing.T) {
 	}
 }
 
+func TestLockContentionReturnsPromptlyWhenContextIsCanceled(t *testing.T) {
+	dir := cacheTestDir(t)
+	lockPath := filepath.Join(dir, cacheFilename+".lock")
+	unlock, err := acquireLock(context.Background(), lockPath, withDefaults(Options{LockTimeout: time.Second}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	attempted := make(chan struct{})
+	var once sync.Once
+	result := make(chan error, 1)
+	catalog := testCatalog(t, `{"id":{"en":"Name"}}`)
+	go func() {
+		_, resolveErr := Resolve(ctx, func(context.Context) (Catalog, error) { return catalog, nil }, Options{
+			CacheDir:    dir,
+			LockTimeout: 5 * time.Second,
+			beforeLockWait: func() {
+				once.Do(func() { close(attempted) })
+			},
+		})
+		result <- resolveErr
+	}()
+	<-attempted
+	cancel()
+	select {
+	case resolveErr := <-result:
+		if got := output.ExitCodeFor(resolveErr); got != 10 {
+			t.Fatalf("exit = %d, want 10; err=%v", got, resolveErr)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("lock acquisition did not return promptly after cancellation")
+	}
+}
+
 func TestProcessLockContention(t *testing.T) {
 	if os.Getenv("RAIDNOW_CACHE_LOCK_HELPER") == "1" {
 		path := os.Getenv("RAIDNOW_CACHE_LOCK_PATH")
-		unlock, err := acquireLock(path, withDefaults(Options{LockTimeout: time.Second}))
+		unlock, err := acquireLock(context.Background(), path, withDefaults(Options{LockTimeout: time.Second}))
 		if err != nil {
 			os.Exit(2)
 		}
@@ -352,7 +540,7 @@ func TestProcessLockContention(t *testing.T) {
 		os.Exit(4)
 	}
 
-	dir := t.TempDir()
+	dir := cacheTestDir(t)
 	lockPath := filepath.Join(dir, cacheFilename+".lock")
 	ready := filepath.Join(dir, "ready")
 	release := filepath.Join(dir, "release")
@@ -391,7 +579,7 @@ func TestProcessLockContention(t *testing.T) {
 }
 
 func TestConcurrentReadersAndWritersSeeOnlyValidCatalogs(t *testing.T) {
-	dir := t.TempDir()
+	dir := cacheTestDir(t)
 	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	catalogs := []Catalog{
 		testCatalog(t, `{"a":{"en":"A"}}`),
@@ -427,7 +615,7 @@ func TestConcurrentReadersAndWritersSeeOnlyValidCatalogs(t *testing.T) {
 }
 
 func TestPermissionsExactIDFallbackAndSafeFormatting(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(cacheTestDir(t), "missing", "cache")
 	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	const secretID = "SECRET-ID_form"
 	const secretName = "SECRET-NAME"
@@ -460,7 +648,7 @@ func TestPermissionsExactIDFallbackAndSafeFormatting(t *testing.T) {
 			}
 		}
 	}
-	missingDir := t.TempDir()
+	missingDir := cacheTestDir(t)
 	_, err = Resolve(context.Background(), nil, Options{CacheDir: missingDir})
 	if output.ExitCodeFor(err) != 11 || strings.Contains(fmt.Sprintf("%#v", err), "SECRET") {
 		t.Fatalf("unavailable mapping/format = %d, %#v", output.ExitCodeFor(err), err)

@@ -3,6 +3,8 @@
 package metadata
 
 import (
+	"errors"
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -32,4 +34,22 @@ func replaceCacheFile(oldPath, newPath string) error {
 		return callErr
 	}
 	return nil
+}
+
+func finalizeTempReplacement(file *os.File, tempName, destination string, rename func(string, string) error) error {
+	opened, err := validateTempPathIdentity(file, tempName)
+	if err != nil {
+		return err
+	}
+	// Windows replacement can require closing the source handle. Preserve its
+	// file identity, close at the last possible point, then revalidate the path
+	// immediately before MoveFileEx.
+	if err := file.Close(); err != nil {
+		return err
+	}
+	pathInfo, err := os.Lstat(tempName)
+	if err != nil || pathInfo.Mode()&os.ModeSymlink != 0 || pathComponentIsReparsePoint(tempName) || !pathInfo.Mode().IsRegular() || !os.SameFile(opened, pathInfo) {
+		return errors.New("temporary cache identity changed")
+	}
+	return rename(tempName, destination)
 }

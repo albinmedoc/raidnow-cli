@@ -41,8 +41,11 @@ type Options struct {
 	FreshOnly    bool
 	LockTimeout  time.Duration
 
-	writeFile func(*os.File, []byte) error
-	rename    func(string, string) error
+	writeFile         func(*os.File, []byte) error
+	rename            func(string, string) error
+	beforeCacheOpen   func(string)
+	beforeReplaceTemp func(string)
+	beforeLockWait    func()
 }
 
 type State string
@@ -175,8 +178,17 @@ func Resolve(ctx context.Context, fetch FetchFunc, options Options) (Result, err
 	if err != nil {
 		return Result{}, err
 	}
+	exists, err := validateCachePathComponents(filepath.Dir(path))
+	if err != nil {
+		return Result{}, localError()
+	}
+	if exists {
+		if err := validateCacheDirectorySecurity(filepath.Dir(path), false); err != nil {
+			return Result{}, localError()
+		}
+	}
 	now := options.Now().UTC()
-	loaded, state := loadCache(path)
+	loaded, state := loadCacheWithOptions(path, options)
 	if state == loadLocalFailure {
 		return Result{}, localError()
 	}
@@ -202,7 +214,7 @@ func Resolve(ctx context.Context, fetch FetchFunc, options Options) (Result, err
 			fetchedAt := options.Now().UTC()
 			data, digest, encodeErr := encodeCache(catalog, fetchedAt)
 			if encodeErr == nil {
-				if persistErr := persistCache(path, data, options); persistErr != nil {
+				if persistErr := persistCache(ctx, path, data, options); persistErr != nil {
 					return Result{}, localError()
 				}
 				return resultFor(path, loadedCache{catalog: catalog, fetched: fetchedAt, digest: digest}, StateRefreshed, 0), nil
@@ -297,6 +309,10 @@ func encodeCache(catalog Catalog, fetchedAt time.Time) ([]byte, string, error) {
 }
 
 func loadCache(path string) (loadedCache, loadState) {
+	return loadCacheWithOptions(path, Options{})
+}
+
+func loadCacheWithOptions(path string, options Options) (loadedCache, loadState) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return loadedCache{}, loadMissing
@@ -310,9 +326,16 @@ func loadCache(path string) (loadedCache, loadState) {
 	if info.Size() == 0 || info.Size() > MaxCacheBytes {
 		return loadedCache{}, loadCorrupt
 	}
-	file, err := os.Open(path)
+	if options.beforeCacheOpen != nil {
+		options.beforeCacheOpen(path)
+	}
+	file, info, err := openCacheFileNoFollow(path)
 	if err != nil {
 		return loadedCache{}, loadLocalFailure
+	}
+	if info.Size() == 0 || info.Size() > MaxCacheBytes {
+		_ = file.Close()
+		return loadedCache{}, loadCorrupt
 	}
 	data, err := io.ReadAll(io.LimitReader(file, MaxCacheBytes+1))
 	closeErr := file.Close()
@@ -384,15 +407,12 @@ func decodeCache(data []byte) (loadedCache, error) {
 	return loadedCache{catalog: catalog, fetched: fetched.UTC(), digest: document.ContentDigest}, nil
 }
 
-func persistCache(path string, data []byte, options Options) error {
+func persistCache(ctx context.Context, path string, data []byte, options Options) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := prepareCacheDirectory(dir); err != nil {
 		return err
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	unlock, err := acquireLock(path+".lock", options)
+	unlock, err := acquireLock(ctx, path+".lock", options)
 	if err != nil {
 		return err
 	}
@@ -425,14 +445,14 @@ func persistCache(path string, data []byte, options Options) error {
 	if err := temp.Sync(); err != nil {
 		return err
 	}
-	if err := temp.Close(); err != nil {
-		return err
+	if options.beforeReplaceTemp != nil {
+		options.beforeReplaceTemp(tempName)
 	}
 	rename := options.rename
 	if rename == nil {
 		rename = replaceCacheFile
 	}
-	if err := rename(tempName, path); err != nil {
+	if err := finalizeTempReplacement(temp, tempName, path, rename); err != nil {
 		return err
 	}
 	if directory, openErr := os.Open(dir); openErr == nil {
@@ -444,9 +464,15 @@ func persistCache(path string, data []byte, options Options) error {
 
 // Advisory locks serialize writers across goroutines and processes. The OS
 // releases the lock when the process exits, so crashes do not leave stale locks.
-func acquireLock(path string, options Options) (func(), error) {
-	deadline := time.Now().Add(options.LockTimeout)
+func acquireLock(ctx context.Context, path string, options Options) (func(), error) {
+	deadline := time.NewTimer(options.LockTimeout)
+	defer deadline.Stop()
 	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 		if info, err := os.Lstat(path); err == nil {
 			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 				return nil, errors.New("unsafe lock")
@@ -461,10 +487,29 @@ func acquireLock(path string, options Options) (func(), error) {
 		if acquired {
 			return unlock, nil
 		}
-		if time.Now().After(deadline) {
-			return nil, errors.New("lock timeout")
+		if options.beforeLockWait != nil {
+			options.beforeLockWait()
 		}
-		time.Sleep(10 * time.Millisecond)
+		retry := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !retry.Stop() {
+				select {
+				case <-retry.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-deadline.C:
+			if !retry.Stop() {
+				select {
+				case <-retry.C:
+				default:
+				}
+			}
+			return nil, errors.New("lock timeout")
+		case <-retry.C:
+		}
 	}
 }
 
