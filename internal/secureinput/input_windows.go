@@ -1,10 +1,10 @@
 //go:build windows
 
-package session
+package secureinput
 
 import "os"
 
-func openTokenFile(path string) (*os.File, error) {
+func openProtectedFile(path string) (*os.File, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -12,7 +12,7 @@ func openTokenFile(path string) (*os.File, error) {
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		file.Close()
-		return nil, errInvalidTokenInput
+		return nil, ErrInvalidInput
 	}
 	return file, nil
 }

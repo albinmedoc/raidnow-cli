@@ -29,6 +29,25 @@ func (writer *failFirstWriter) Write(content []byte) (int, error) {
 	return writer.output.Write(content)
 }
 
+func TestReadmeDocumentsTrainerInputMilestoneAndSecretHandling(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	contents := string(readme)
+	for _, required := range []string{
+		"working token bootstrap",
+		"per-invocation trainer-input library",
+		"token get` ignores `--token-file`",
+		"--trainer-code-file <path|->",
+		"never a raw argv flag",
+	} {
+		if !strings.Contains(contents, required) {
+			t.Fatalf("README trainer/token guidance does not contain %q", required)
+		}
+	}
+}
+
 func TestReadmeDocumentsSingleOpenNoclobberTokenSave(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
