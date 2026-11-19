@@ -61,7 +61,7 @@ func NewTrainer(name, code string, level int, country string) (Trainer, error) {
 		return Trainer{}, invalid(ValidationFieldCode)
 	}
 	code = strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
+		if r == ' ' || r == '\u3000' {
 			return -1
 		}
 		return r

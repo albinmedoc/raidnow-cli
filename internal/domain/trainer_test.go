@@ -27,6 +27,53 @@ func TestNewTrainerNormalizesInvocationValues(t *testing.T) {
 	}
 }
 
+func TestNewTrainerAcceptsOnlyPermittedCodeSeparators(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		code string
+	}{
+		{name: "compact", code: "123456789012"},
+		{name: "ascii_space", code: "1234 5678 9012"},
+		{name: "ideographic_space", code: "1234\u30005678\u30009012"},
+		{name: "mixed", code: "1234 5678\u30009012"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			trainer, err := NewTrainer("Ash123", testCase.code, 1, "se")
+			if err != nil {
+				t.Fatalf("NewTrainer: %v", err)
+			}
+			if got, want := trainer.CodeFormValue(), "123456789012"; got != want {
+				t.Fatalf("code = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestNewTrainerRejectsOtherUnicodeCodeSeparators(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		separator string
+	}{
+		{name: "no_break_space", separator: "\u00a0"},
+		{name: "ogham_space_mark", separator: "\u1680"},
+		{name: "en_quad", separator: "\u2000"},
+		{name: "em_space", separator: "\u2003"},
+		{name: "narrow_no_break_space", separator: "\u202f"},
+		{name: "medium_mathematical_space", separator: "\u205f"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := NewTrainer("Ash123", "1234"+testCase.separator+"56789012", 1, "se")
+			if err == nil {
+				t.Fatal("NewTrainer: got nil error, want rejection")
+			}
+			var validationError *ValidationError
+			if !errors.As(err, &validationError) || validationError.Field() != ValidationFieldCode {
+				t.Fatalf("error = %v, want sanitized %q validation error", err, ValidationFieldCode)
+			}
+		})
+	}
+}
+
 func TestNewTrainerRejectsUnsafeRunesBeforeNormalization(t *testing.T) {
 	unsafeRunes := []struct {
 		name  string

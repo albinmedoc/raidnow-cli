@@ -14,7 +14,7 @@ import (
 func TestTrainerInputFlagsReadNormalizedTrainerFromStdinWithoutCodeArgument(t *testing.T) {
 	command := &cobra.Command{Use: "future"}
 	input := BindTrainerInputFlags(command)
-	command.SetIn(strings.NewReader("1234\u20035678 9012\n"))
+	command.SetIn(strings.NewReader("1234\u30005678 9012\n"))
 	arguments := []string{
 		"--trainer-name", " Ash123 ",
 		"--trainer-level", "80",
