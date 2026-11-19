@@ -1,0 +1,15 @@
+# Build artifacts
+/raidnow
+/bin/
+/dist/
+
+# Test and coverage output
+*.test
+*.out
+coverage.*
+
+# Local environment and editor files
+.env
+.idea/
+.vscode/
+.DS_Store
