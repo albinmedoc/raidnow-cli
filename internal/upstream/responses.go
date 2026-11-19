@@ -524,10 +524,18 @@ func classifyStatus(object map[string]any) error {
 func structuredRejection(object map[string]any) error {
 	text, _ := exactScalar(object["text"])
 	normalized := strings.ToLower(text)
-	if strings.Contains(normalized, "session has expired") || strings.Contains(normalized, "session expired") || strings.Contains(normalized, "login required") || strings.Contains(normalized, "please log in") || strings.Contains(normalized, "please login") || strings.Contains(normalized, "please restart") {
+	if strings.Contains(normalized, "session has expired") || strings.Contains(normalized, "session expired") || strings.Contains(normalized, "login required") || strings.Contains(normalized, "please log in") || strings.Contains(normalized, "please login") || restartOnlyMessage(text) {
 		return authenticationUnsupported()
 	}
 	return upstreamRejection()
+}
+
+func restartOnlyMessage(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if strings.HasSuffix(normalized, ".") || strings.HasSuffix(normalized, "!") || strings.HasSuffix(normalized, "?") {
+		normalized = strings.TrimSpace(normalized[:len(normalized)-1])
+	}
+	return normalized == "please restart"
 }
 
 func exactScalar(value any) (string, bool) {
