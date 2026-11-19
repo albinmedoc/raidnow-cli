@@ -14,6 +14,7 @@ func NewRootCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "raidnow",
 		Short: shortDescription,
+		Args:  cobra.NoArgs,
 	}
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		return command.Help()

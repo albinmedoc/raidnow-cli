@@ -40,3 +40,36 @@ func TestVersionEmitsStableDevelopmentVersion(t *testing.T) {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
+
+func TestVersionUsesInjectedPackageVersion(t *testing.T) {
+	previousVersion := Version
+	Version = "v9.8.7-test"
+	t.Cleanup(func() {
+		Version = previousVersion
+	})
+
+	var output bytes.Buffer
+	command := NewRootCommand()
+	command.SetOut(&output)
+	command.SetErr(&output)
+	command.SetArgs([]string{"version"})
+
+	if err := command.Execute(); err != nil {
+		t.Fatalf("execute version command: %v", err)
+	}
+
+	if got, want := output.String(), "raidnow v9.8.7-test\n"; got != want {
+		t.Fatalf("version output = %q, want injected %q", got, want)
+	}
+}
+
+func TestRootRejectsUnexpectedPositionalArguments(t *testing.T) {
+	command := NewRootCommand()
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"--", "unexpected"})
+
+	if err := command.Execute(); err == nil {
+		t.Fatal("execute root command with positional argument: got nil error, want rejection")
+	}
+}
