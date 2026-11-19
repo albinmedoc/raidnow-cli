@@ -47,13 +47,14 @@ func TestBinaryInvalidCommandExitsNonzero(t *testing.T) {
 	}
 }
 
-func TestHelpAndVersionLeaveWorkingDirectoryEmpty(t *testing.T) {
+func TestNoArgumentsHelpAndVersionLeaveWorkingDirectoryEmpty(t *testing.T) {
 	binary := buildBinary(t)
 
 	testCases := []struct {
 		name      string
 		arguments []string
 	}{
+		{name: "no_arguments"},
 		{name: "help", arguments: []string{"--help"}},
 		{name: "version", arguments: []string{"version"}},
 	}
@@ -83,12 +84,12 @@ func TestHelpAndVersionLeaveWorkingDirectoryEmpty(t *testing.T) {
 	}
 }
 
-func TestHelpAndVersionDoNotUseConfiguredNetworkProxy(t *testing.T) {
+func TestNoArgumentsHelpAndVersionDoNotUseConfiguredNetworkProxy(t *testing.T) {
 	binary := buildBinary(t)
 	var requests atomic.Int32
 	proxy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
-		http.Error(response, "network access is forbidden in help and version", http.StatusBadGateway)
+		http.Error(response, "network access is forbidden in no-argument, help, and version execution", http.StatusBadGateway)
 	}))
 	t.Cleanup(proxy.Close)
 
@@ -96,6 +97,7 @@ func TestHelpAndVersionDoNotUseConfiguredNetworkProxy(t *testing.T) {
 		name      string
 		arguments []string
 	}{
+		{name: "no_arguments"},
 		{name: "help", arguments: []string{"--help"}},
 		{name: "version", arguments: []string{"version"}},
 	}
@@ -120,7 +122,7 @@ func TestHelpAndVersionDoNotUseConfiguredNetworkProxy(t *testing.T) {
 	}
 
 	if got := requests.Load(); got != 0 {
-		t.Fatalf("help/version made %d request(s) through the configured network proxy", got)
+		t.Fatalf("no-argument/help/version execution made %d request(s) through the configured network proxy", got)
 	}
 }
 
