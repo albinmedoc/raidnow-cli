@@ -59,11 +59,6 @@ func NewClient(config Config) (*Client, error) {
 	}
 	clientCopy := *httpClient
 	clientCopy.Jar = nil
-	baseTransport := clientCopy.Transport
-	if baseTransport == nil {
-		baseTransport = http.DefaultTransport
-	}
-	clientCopy.Transport = dispatchTrackingTransport{base: baseTransport}
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}

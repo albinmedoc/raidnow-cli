@@ -115,7 +115,8 @@ func TestPostFormClosesBodyForEveryHTTPStatus(t *testing.T) {
 
 func responseClient(t *testing.T, status int, body io.ReadCloser) *Client {
 	t.Helper()
-	return mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	return mustClient(t, Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		signalWroteRequest(request, nil)
 		return &http.Response{StatusCode: status, Body: body, Header: make(http.Header)}, nil
 	})}})
 }

@@ -23,28 +23,6 @@ func TestClientFormattingDoesNotExposeEndpointQuery(t *testing.T) {
 	}
 }
 
-func TestDispatchTrackingTransportMarksOnlyEnteredRoundTrips(t *testing.T) {
-	var called atomic.Bool
-	transport := dispatchTrackingTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		called.Store(true)
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Header: make(http.Header)}, nil
-	})}
-	var dispatched atomic.Bool
-	request, err := http.NewRequestWithContext(context.WithValue(context.Background(), dispatchStateKey{}, &dispatched), http.MethodPost, "https://example.com", nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-
-	response, err := transport.RoundTrip(request)
-	if err != nil {
-		t.Fatalf("round trip: %v", err)
-	}
-	_ = response.Body.Close()
-	if !called.Load() || !dispatched.Load() {
-		t.Fatalf("called=%t dispatched=%t, want both true", called.Load(), dispatched.Load())
-	}
-}
-
 func TestConcurrentCallsKeepRequestStateIsolated(t *testing.T) {
 	const callCount = 40
 	var requests atomic.Int32
