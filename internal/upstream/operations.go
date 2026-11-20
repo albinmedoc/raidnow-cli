@@ -14,6 +14,7 @@ import (
 
 const (
 	maxSelectionValues = 64
+	maxLobbyFilters    = 256
 	maxQueryValueBytes = 256
 	maxLobbyPage       = 10000
 )
@@ -55,7 +56,7 @@ func (client *Client) ListRaids(ctx context.Context, token string, query LobbyQu
 	if !session.AnonymousTokenIsValid(token) || query.Page < 1 || query.Page > maxLobbyPage || !allowedHostLevel(query.HostLevel) || !safeOptionalValue(query.SearchRank) {
 		return nil, invalidArguments("Ogiltiga sökvillkor.")
 	}
-	filters, ok := normalizeValues(query.Filters, true)
+	filters, ok := normalizeValuesBounded(query.Filters, true, maxLobbyFilters)
 	if !ok {
 		return nil, invalidArguments("Ogiltiga sökvillkor.")
 	}
@@ -200,7 +201,11 @@ func normalizeSelectionPairs(ranks, pokemonIDs []string) ([]string, []string, bo
 }
 
 func normalizeValues(values []string, requireNonempty bool) ([]string, bool) {
-	if len(values) > maxSelectionValues {
+	return normalizeValuesBounded(values, requireNonempty, maxSelectionValues)
+}
+
+func normalizeValuesBounded(values []string, requireNonempty bool, maximum int) ([]string, bool) {
+	if len(values) > maximum {
 		return nil, false
 	}
 	result := make([]string, 0, len(values))

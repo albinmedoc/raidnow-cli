@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -70,6 +71,29 @@ func TestListRaidsPostsExactQueryAndNormalizesObjectList(t *testing.T) {
 		"type": {"par_list"}, "possible": {"false"}, "filter[]": {"egg", "ザシアン"}, "page": {"2"}, "firstaccess": {"0"},
 		"searchrank": {"5"}, "hostevalstar": {""}, "guestevalstar": {""}, "lang": {"1"}, "token": {token}, "hostlevel": {"50"}, "hostevaluate[]": {"-1", "0", "2"},
 	})
+}
+
+func TestListRaidsAcceptsFullCurrentBossCatalogAsExclusions(t *testing.T) {
+	var captured url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_ = request.ParseForm()
+		captured = request.PostForm
+		_, _ = response.Write([]byte(`{"status":"success","list":[]}`))
+	}))
+	defer server.Close()
+	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+	filters := make([]string, 77)
+	for index := range filters {
+		filters[index] = fmt.Sprintf("boss-%d", index)
+	}
+
+	_, err := client.ListRaids(context.Background(), "token", LobbyQuery{Page: 1, Filters: filters}, CallOptions{})
+	if err != nil {
+		t.Fatalf("list raids with current catalog: %v", err)
+	}
+	if got := captured["filter[]"]; !reflect.DeepEqual(got, filters) {
+		t.Fatalf("filters = %#v, want %#v", got, filters)
+	}
 }
 
 func TestListRaidsNormalizesLiteSelectionFields(t *testing.T) {
@@ -165,7 +189,7 @@ func TestListRaidsRejectsInvalidQueryBeforeNetwork(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	defer server.Close()
 	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
-	oversized := make([]string, maxSelectionValues+1)
+	oversized := make([]string, maxLobbyFilters+1)
 	for index := range oversized {
 		oversized[index] = "boss"
 	}
