@@ -169,7 +169,7 @@ func TestQueueStatusRendersNormalizedJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "{\"ok\":true,\"command\":\"queue status\",\"status\":\"matched\",\"data\":{\"state\":\"matched\",\"raidId\":\"raid-7\"},\"warnings\":[]}\n"
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"queue status\",\"status\":\"matched\",\"data\":{\"state\":\"matched\",\"raidId\":\"raid-7\"},\"warnings\":[]}\n"
 	if stdout != want || len(operations.calls) != 1 || operations.calls[0].name != "poll" {
 		t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
 	}
@@ -227,7 +227,7 @@ func TestLobbiesListAcceptsEmptyJSONList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "{\"ok\":true,\"command\":\"lobbies list\",\"status\":\"listed\",\"data\":[],\"warnings\":[]}\n"
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"lobbies list\",\"status\":\"listed\",\"data\":[],\"warnings\":[]}\n"
 	if stdout != want {
 		t.Fatalf("stdout=%q want=%q", stdout, want)
 	}
@@ -239,7 +239,7 @@ func TestRaidJoinNeedsNoTrainerCodeAndRendersJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "{\"ok\":true,\"command\":\"raid join\",\"status\":\"joined\",\"data\":{\"joined\":true,\"raidId\":\"raid-9\"},\"warnings\":[]}\n"
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"raid join\",\"status\":\"joined\",\"data\":{\"joined\":true,\"raidId\":\"raid-9\"},\"warnings\":[]}\n"
 	if stdout != want || len(operations.calls) != 1 || operations.calls[0].identity.CountryFormValue() != "jp" {
 		t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
 	}

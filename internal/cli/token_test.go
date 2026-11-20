@@ -105,7 +105,7 @@ func TestTokenGetJSONPrintsExplicitSecretEnvelope(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("execute JSON token get: %v", err)
 	}
-	if got, want := stdout.String(), "{\"ok\":true,\"command\":\"token get\",\"status\":\"secret\",\"data\":{\"token\":\"opaque\\\"token\",\"containsSecret\":true},\"warnings\":[\"Tokenen är hemlig; lagra och dela den säkert.\"]}\n"; got != want {
+	if got, want := stdout.String(), "{\"schemaVersion\":1,\"ok\":true,\"command\":\"token get\",\"status\":\"secret\",\"data\":{\"token\":\"opaque\\\"token\",\"containsSecret\":true},\"warnings\":[\"Tokenen är hemlig; lagra och dela den säkert.\"]}\n"; got != want {
 		t.Fatalf("stdout = %q, want exact %q", got, want)
 	}
 }
@@ -150,20 +150,5 @@ func TestTokenGetFailureReturnsSanitizedErrorForCentralRendering(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), secret) || strings.Contains(stderr.String(), "<html>") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("failure leaked secret or HTML: err=%q stderr=%q", err, stderr.String())
-	}
-}
-
-func TestJSONFlagDoesNotChangeVersionOutput(t *testing.T) {
-	var stdout bytes.Buffer
-	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}})
-	command.SetOut(&stdout)
-	command.SetErr(&bytes.Buffer{})
-	command.SetArgs([]string{"--json", "version"})
-
-	if err := command.Execute(); err != nil {
-		t.Fatalf("execute JSON version: %v", err)
-	}
-	if got, want := stdout.String(), "raidnow dev\n"; got != want {
-		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }

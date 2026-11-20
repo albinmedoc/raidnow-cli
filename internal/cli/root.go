@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/metadata"
+	"github.com/albinmedoc/raidnow-cli/internal/output"
 	"github.com/albinmedoc/raidnow-cli/internal/session"
 	"github.com/albinmedoc/raidnow-cli/internal/upstream"
 	"github.com/spf13/cobra"
@@ -25,6 +26,10 @@ type RootOptions struct {
 	Metadata       MetadataFetcher
 	TokenFile      string
 	RequestTimeout time.Duration
+}
+
+type versionResponse struct {
+	Version string `json:"version"`
 }
 
 func NewRootCommand() *cobra.Command {
@@ -74,6 +79,9 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 		Short: "Print the raidnow version",
 		Args:  usageNoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if jsonOutput {
+				return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("version", "shown", versionResponse{Version: Version}, nil))
+			}
 			_, err := fmt.Fprintf(command.OutOrStdout(), "raidnow %s\n", Version)
 			return err
 		},

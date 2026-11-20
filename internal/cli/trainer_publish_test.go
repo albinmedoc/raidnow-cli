@@ -74,7 +74,7 @@ func TestTrainerPublishJSONSuccessHasNoIdentityFields(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	want := "{\"ok\":true,\"command\":\"trainer publish\",\"status\":\"published\",\"data\":{\"published\":true},\"warnings\":[]}\n"
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"trainer publish\",\"status\":\"published\",\"data\":{\"published\":true},\"warnings\":[]}\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout=%q want=%q", stdout.String(), want)
 	}

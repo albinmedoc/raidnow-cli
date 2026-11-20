@@ -2,6 +2,8 @@ package output
 
 type ErrorCode string
 
+const SchemaVersion = 1
+
 type CLIError struct {
 	Code    ErrorCode
 	Message string
@@ -16,11 +18,12 @@ func (err *CLIError) Error() string {
 }
 
 type SuccessEnvelope struct {
-	OK       bool     `json:"ok"`
-	Command  string   `json:"command"`
-	Status   string   `json:"status"`
-	Data     any      `json:"data"`
-	Warnings []string `json:"warnings"`
+	SchemaVersion int      `json:"schemaVersion"`
+	OK            bool     `json:"ok"`
+	Command       string   `json:"command"`
+	Status        string   `json:"status"`
+	Data          any      `json:"data"`
+	Warnings      []string `json:"warnings"`
 }
 
 type ErrorDetail struct {
@@ -29,10 +32,11 @@ type ErrorDetail struct {
 }
 
 type FailureEnvelope struct {
-	OK      bool        `json:"ok"`
-	Command string      `json:"command"`
-	Status  string      `json:"status"`
-	Error   ErrorDetail `json:"error"`
+	SchemaVersion int         `json:"schemaVersion"`
+	OK            bool        `json:"ok"`
+	Command       string      `json:"command"`
+	Status        string      `json:"status"`
+	Error         ErrorDetail `json:"error"`
 }
 
 func NewSuccess(command, status string, data any, warnings []string) SuccessEnvelope {
@@ -40,20 +44,22 @@ func NewSuccess(command, status string, data any, warnings []string) SuccessEnve
 		warnings = []string{}
 	}
 	return SuccessEnvelope{
-		OK:       true,
-		Command:  command,
-		Status:   status,
-		Data:     data,
-		Warnings: warnings,
+		SchemaVersion: SchemaVersion,
+		OK:            true,
+		Command:       command,
+		Status:        status,
+		Data:          data,
+		Warnings:      warnings,
 	}
 }
 
 func NewFailure(command, status string, err error, secrets ...string) FailureEnvelope {
 	publicError := PublicError(err)
 	return FailureEnvelope{
-		OK:      false,
-		Command: command,
-		Status:  status,
+		SchemaVersion: SchemaVersion,
+		OK:            false,
+		Command:       command,
+		Status:        status,
 		Error: ErrorDetail{
 			Code:    publicError.Code,
 			Message: Redact(publicError.Message, secrets...),

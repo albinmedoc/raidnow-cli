@@ -104,7 +104,7 @@ func TestMalformedCLIWithJSONFlagUsesSanitizedInvalidArgumentsEnvelope(t *testin
 	if exitCode := run([]string{"--json", "unknown-" + secret}, &stdout, &stderr); exitCode != 2 {
 		t.Fatalf("exit code = %d, want 2", exitCode)
 	}
-	want := "{\"ok\":false,\"command\":\"raidnow\",\"status\":\"failed\",\"error\":{\"code\":\"INVALID_ARGUMENTS\",\"message\":\"Ogiltiga kommandoradsargument.\"}}\n"
+	want := "{\"schemaVersion\":1,\"ok\":false,\"command\":\"raidnow\",\"status\":\"failed\",\"error\":{\"code\":\"INVALID_ARGUMENTS\",\"message\":\"Ogiltiga kommandoradsargument.\"}}\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("stdout = %q, want exact %q", got, want)
 	}
@@ -113,6 +113,22 @@ func TestMalformedCLIWithJSONFlagUsesSanitizedInvalidArgumentsEnvelope(t *testin
 	}
 	if strings.Contains(stdout.String(), secret) {
 		t.Fatalf("stdout echoed raw argument: %q", stdout.String())
+	}
+}
+
+func TestJSONVersionWritesOneVersionedSuccessEnvelope(t *testing.T) {
+	var stdout strings.Builder
+	var stderr strings.Builder
+
+	if exitCode := run([]string{"--json", "version"}, &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", exitCode, stderr.String())
+	}
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"version\",\"status\":\"shown\",\"data\":{\"version\":\"dev\"},\"warnings\":[]}\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 
@@ -163,7 +179,7 @@ func TestTokenWriterFailureIsSanitizedInternalJSONError(t *testing.T) {
 	if exitCode := run([]string{"--json", "token", "get"}, stdout, &stderr); exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1", exitCode)
 	}
-	want := "{\"ok\":false,\"command\":\"token get\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
+	want := "{\"schemaVersion\":1,\"ok\":false,\"command\":\"token get\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
 	if got := stdout.output.String(); got != want {
 		t.Fatalf("stdout recovery output = %q, want exact %q", got, want)
 	}
@@ -285,7 +301,7 @@ func TestBinaryTokenGetUsesOneStatelessRequestAndPrintsExactOutput(t *testing.T)
 		want      string
 	}{
 		{name: "human", arguments: []string{"token", "get"}, want: token + "\n"},
-		{name: "json", arguments: []string{"--json", "token", "get"}, want: `{"ok":true,"command":"token get","status":"secret","data":{"token":"` + token + `","containsSecret":true},"warnings":["Tokenen är hemlig; lagra och dela den säkert."]}` + "\n"},
+		{name: "json", arguments: []string{"--json", "token", "get"}, want: `{"schemaVersion":1,"ok":true,"command":"token get","status":"secret","data":{"token":"` + token + `","containsSecret":true},"warnings":["Tokenen är hemlig; lagra och dela den säkert."]}` + "\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			workingDirectory := t.TempDir()
@@ -345,7 +361,7 @@ func TestBinaryTokenGetJSONFailureUsesStableEnvelopeOnStdout(t *testing.T) {
 	if !ok || exitError.ExitCode() != 8 {
 		t.Fatalf("JSON token failure exit = %v, want code 8", err)
 	}
-	want := "{\"ok\":false,\"command\":\"token get\",\"status\":\"failed\",\"error\":{\"code\":\"READ_NETWORK_ERROR\",\"message\":\"Kunde inte hämta en anonym token från Raid NOW.\"}}\n"
+	want := "{\"schemaVersion\":1,\"ok\":false,\"command\":\"token get\",\"status\":\"failed\",\"error\":{\"code\":\"READ_NETWORK_ERROR\",\"message\":\"Kunde inte hämta en anonym token från Raid NOW.\"}}\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want exact %q", stdout.String(), want)
 	}
@@ -435,9 +451,9 @@ func TestRunTrainerPublishExitOutputAndNoSideEffects(t *testing.T) {
 		wantErr   string
 	}{
 		{name: "human success", publisher: &mainStubPublisher{}, wantOut: "Tränaruppgifterna publicerades.\n"},
-		{name: "json success", json: true, publisher: &mainStubPublisher{}, wantOut: "{\"ok\":true,\"command\":\"trainer publish\",\"status\":\"published\",\"data\":{\"published\":true},\"warnings\":[]}\n"},
+		{name: "json success", json: true, publisher: &mainStubPublisher{}, wantOut: "{\"schemaVersion\":1,\"ok\":true,\"command\":\"trainer publish\",\"status\":\"published\",\"data\":{\"published\":true},\"warnings\":[]}\n"},
 		{name: "human uncertain", publisher: &mainStubPublisher{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret-marker")}, wantExit: 9, wantErr: "Fel [WRITE_OUTCOME_UNKNOWN]: Upstream-anslutningen bröts och skrivningens utfall är okänt.\n"},
-		{name: "json uncertain", json: true, publisher: &mainStubPublisher{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret-marker")}, wantExit: 9, wantOut: "{\"ok\":false,\"command\":\"trainer publish\",\"status\":\"failed\",\"error\":{\"code\":\"WRITE_OUTCOME_UNKNOWN\",\"message\":\"Upstream-anslutningen bröts och skrivningens utfall är okänt.\"}}\n"},
+		{name: "json uncertain", json: true, publisher: &mainStubPublisher{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret-marker")}, wantExit: 9, wantOut: "{\"schemaVersion\":1,\"ok\":false,\"command\":\"trainer publish\",\"status\":\"failed\",\"error\":{\"code\":\"WRITE_OUTCOME_UNKNOWN\",\"message\":\"Upstream-anslutningen bröts och skrivningens utfall är okänt.\"}}\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			working := t.TempDir()

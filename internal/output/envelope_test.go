@@ -15,7 +15,7 @@ func TestRenderJSONSuccessHasStableSchemaAndEmptyWarnings(t *testing.T) {
 	if err := RenderJSON(&destination, envelope); err != nil {
 		t.Fatalf("render JSON success: %v", err)
 	}
-	const want = "{\"ok\":true,\"command\":\"version\",\"status\":\"ok\",\"data\":{\"version\":\"dev\"},\"warnings\":[]}\n"
+	const want = "{\"schemaVersion\":1,\"ok\":true,\"command\":\"version\",\"status\":\"ok\",\"data\":{\"version\":\"dev\"},\"warnings\":[]}\n"
 	if got := destination.String(); got != want {
 		t.Fatalf("JSON success = %q, want %q", got, want)
 	}
@@ -28,7 +28,7 @@ func TestRenderJSONFailureHasStableSchema(t *testing.T) {
 	if err := RenderJSON(&destination, envelope); err != nil {
 		t.Fatalf("render JSON failure: %v", err)
 	}
-	const want = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Ingen raid hittades.\"}}\n"
+	const want = "{\"schemaVersion\":1,\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Ingen raid hittades.\"}}\n"
 	if got := destination.String(); got != want {
 		t.Fatalf("JSON failure = %q, want %q", got, want)
 	}
@@ -45,7 +45,7 @@ func TestFailureHidesUnknownDetailsAndRedactsSecrets(t *testing.T) {
 	if err := RenderJSON(&unknown, NewFailure("search", "failed", errors.New("token=do-not-print"))); err != nil {
 		t.Fatal(err)
 	}
-	const wantUnknown = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
+	const wantUnknown = "{\"schemaVersion\":1,\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Ett oväntat internt fel inträffade.\"}}\n"
 	if unknown.String() != wantUnknown {
 		t.Fatalf("unknown failure = %q, want %q", unknown.String(), wantUnknown)
 	}
@@ -55,7 +55,7 @@ func TestFailureHidesUnknownDetailsAndRedactsSecrets(t *testing.T) {
 	if renderError := RenderJSON(&redacted, NewFailure("search", "failed", err, "token-value")); renderError != nil {
 		t.Fatal(renderError)
 	}
-	const wantRedacted = "{\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INVALID_INPUT\",\"message\":\"Ogiltig [REDACTED] för [REDACTED]\"}}\n"
+	const wantRedacted = "{\"schemaVersion\":1,\"ok\":false,\"command\":\"search\",\"status\":\"failed\",\"error\":{\"code\":\"INVALID_INPUT\",\"message\":\"Ogiltig [REDACTED] för [REDACTED]\"}}\n"
 	if redacted.String() != wantRedacted {
 		t.Fatalf("redacted failure = %q, want %q", redacted.String(), wantRedacted)
 	}

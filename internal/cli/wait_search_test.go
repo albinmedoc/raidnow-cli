@@ -39,7 +39,7 @@ func TestQueueWaitPollsImmediatelyAndRendersMatch(t *testing.T) {
 		want string
 	}{
 		{name: "human", want: "matched raid-7\n"},
-		{name: "json", json: true, want: "{\"ok\":true,\"command\":\"queue wait\",\"status\":\"matched\",\"data\":{\"state\":\"matched\",\"raidId\":\"raid-7\"},\"warnings\":[]}\n"},
+		{name: "json", json: true, want: "{\"schemaVersion\":1,\"ok\":true,\"command\":\"queue wait\",\"status\":\"matched\",\"data\":{\"state\":\"matched\",\"raidId\":\"raid-7\"},\"warnings\":[]}\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			operations := &stubRaidOperations{poll: domain.QueuePoll{State: domain.QueueMatched, RaidID: "raid-7"}}
@@ -96,7 +96,7 @@ func TestSearchCreatesOnceThenReturnsMatchedQueue(t *testing.T) {
 		want string
 	}{
 		{name: "human", want: "matched raid-9\n"},
-		{name: "json", json: true, want: "{\"ok\":true,\"command\":\"search\",\"status\":\"matched\",\"data\":{\"state\":\"matched\",\"raidId\":\"raid-9\"},\"warnings\":[]}\n"},
+		{name: "json", json: true, want: "{\"schemaVersion\":1,\"ok\":true,\"command\":\"search\",\"status\":\"matched\",\"data\":{\"state\":\"matched\",\"raidId\":\"raid-9\"},\"warnings\":[]}\n"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			operations := &stubRaidOperations{poll: domain.QueuePoll{State: domain.QueueMatched, RaidID: "raid-9"}}

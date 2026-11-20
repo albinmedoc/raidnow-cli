@@ -39,7 +39,7 @@ func TestBossesListRendersJSONView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","waitingCount":4}],"warnings":[]}` + "\n"
+	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","waitingCount":4}],"warnings":[]}` + "\n"
 	if stdout != want {
 		t.Fatalf("stdout=%q", stdout)
 	}
