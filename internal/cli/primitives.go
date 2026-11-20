@@ -37,6 +37,7 @@ func newQueueCommand(operations RaidOperations, tokenFile *string, requestTimeou
 	command.RunE = helpRun
 	command.AddCommand(newQueueJoinCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newQueueStatusCommand(operations, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newQueueCheckCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newQueueWaitCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newQueueCancelCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	return command
@@ -113,12 +114,43 @@ func newQueueStatusCommand(operations RaidOperations, tokenFile *string, request
 	return command
 }
 
-func newQueueCancelCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+func newQueueCheckCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
 	var pokemon []string
-	command := &cobra.Command{Use: "cancel", Short: "Cancel and verify the Auto Join queue", Args: usageNoArgs}
-	command.Flags().StringArrayVar(&pokemon, "pokemon", nil, "Pokemon/form ID to verify after cancellation (repeatable)")
+	command := &cobra.Command{Use: "check", Short: "Check whether the Auto Join queue is present", Args: usageNoArgs}
+	command.Flags().StringArrayVar(&pokemon, "pokemon", nil, "Pokemon/form ID to check (repeatable)")
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || len(pokemon) == 0 {
+			return newUsageError()
+		}
+		token, err := readCommandToken(command, *tokenFile)
+		if err != nil {
+			return err
+		}
+		check, err := operations.CheckMatching(command.Context(), token, pokemon, callOptions(requestTimeout))
+		if err != nil {
+			return sanitizedPublisherError(err)
+		}
+		status := "absent"
+		if check.Present {
+			status = "present"
+		}
+		if *jsonOutput {
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("queue check", status, check, nil))
+		}
+		_, err = fmt.Fprintln(command.OutOrStdout(), status)
+		return err
+	}
+	return command
+}
+
+func newQueueCancelCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	var pokemon []string
+	verify := true
+	command := &cobra.Command{Use: "cancel", Short: "Cancel and verify the Auto Join queue", Args: usageNoArgs}
+	command.Flags().StringArrayVar(&pokemon, "pokemon", nil, "Pokemon/form ID to verify after cancellation (repeatable)")
+	command.Flags().BoolVar(&verify, "verify", true, "Verify that the queue is absent after cancellation")
+	command.RunE = func(command *cobra.Command, _ []string) error {
+		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || (verify && len(pokemon) == 0) {
 			return newUsageError()
 		}
 		token, err := readCommandToken(command, *tokenFile)
@@ -128,6 +160,16 @@ func newQueueCancelCommand(operations RaidOperations, tokenFile *string, request
 		options := callOptions(requestTimeout)
 		if err := operations.CancelMatching(command.Context(), token, options); err != nil {
 			return sanitizedPublisherError(err)
+		}
+		if !verify {
+			if *jsonOutput {
+				return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("queue cancel", "requested", struct {
+					Requested bool `json:"requested"`
+					Verified  bool `json:"verified"`
+				}{Requested: true, Verified: false}, nil))
+			}
+			_, err = fmt.Fprintln(command.OutOrStdout(), "Avbrytningsbegäran skickades.")
+			return err
 		}
 		check, err := operations.CheckMatching(command.Context(), token, pokemon, options)
 		if err != nil {

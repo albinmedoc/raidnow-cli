@@ -215,6 +215,84 @@ func TestQueueStatusRendersExactHumanStates(t *testing.T) {
 	}
 }
 
+func TestQueueCheckRendersExactHumanStatesAndCallsCheckOnce(t *testing.T) {
+	for _, testCase := range []struct {
+		present bool
+		want    string
+	}{
+		{present: true, want: "present\n"},
+		{present: false, want: "absent\n"},
+	} {
+		operations := &stubRaidOperations{check: domain.QueueCheck{Present: testCase.present}}
+		stdout, err := runPrimitiveCommand(t, operations, "opaque-token\n", "queue", "check", "--pokemon", "150", "--pokemon", "6_x")
+		if err != nil || stdout != testCase.want {
+			t.Fatalf("present=%v stdout=%q err=%v", testCase.present, stdout, err)
+		}
+		if len(operations.calls) != 1 {
+			t.Fatalf("calls=%#v", operations.calls)
+		}
+		call := operations.calls[0]
+		if call.name != "check" || call.token != "opaque-token" || call.options.Timeout != 3*time.Second || len(call.pokemon) != 2 || call.pokemon[0] != "150" || call.pokemon[1] != "6_x" {
+			t.Fatalf("call=%+v", call)
+		}
+	}
+}
+
+func TestQueueCheckRendersQueueCheckUnchangedAsJSON(t *testing.T) {
+	priority := 2
+	for _, testCase := range []struct {
+		check domain.QueueCheck
+		want  string
+	}{
+		{
+			check: domain.QueueCheck{
+				Present:  true,
+				ID:       "queue-7",
+				Priority: &priority,
+				Waiting:  []domain.QueueWaitingEntry{{ID: "wait-1", Rank: "5", PokemonID: "150"}},
+			},
+			want: "{\"schemaVersion\":1,\"ok\":true,\"command\":\"queue check\",\"status\":\"present\",\"data\":{\"present\":true,\"id\":\"queue-7\",\"priority\":2,\"waiting\":[{\"id\":\"wait-1\",\"rank\":\"5\",\"pokemonId\":\"150\"}]},\"warnings\":[]}\n",
+		},
+		{
+			check: domain.QueueCheck{Waiting: []domain.QueueWaitingEntry{}},
+			want:  "{\"schemaVersion\":1,\"ok\":true,\"command\":\"queue check\",\"status\":\"absent\",\"data\":{\"present\":false,\"waiting\":[]},\"warnings\":[]}\n",
+		},
+	} {
+		operations := &stubRaidOperations{check: testCase.check}
+		stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "queue", "check", "--pokemon", "150")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stdout != testCase.want || len(operations.calls) != 1 || operations.calls[0].name != "check" {
+			t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
+		}
+	}
+}
+
+func TestQueueCheckRequiresPokemonBeforeReadingToken(t *testing.T) {
+	operations := &stubRaidOperations{}
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, TokenFile: "-", RequestTimeout: time.Second})
+	command.SetIn(panicReader{})
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"queue", "check"})
+	err := command.Execute()
+	if output.ExitCodeFor(err) != output.ExitInvalidArguments || len(operations.calls) != 0 {
+		t.Fatalf("exit=%d calls=%#v err=%v", output.ExitCodeFor(err), operations.calls, err)
+	}
+}
+
+func TestQueueCheckSanitizesOperationErrors(t *testing.T) {
+	operations := &stubRaidOperations{checkErr: output.NewError(output.CodeReadNetwork, "secret upstream response")}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "queue", "check", "--pokemon", "150")
+	if output.ExitCodeFor(err) != output.ExitReadNetwork || strings.Contains(err.Error(), "secret") || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q err=%v", output.ExitCodeFor(err), stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "check" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+}
+
 func TestQueueCancelVerifiesAbsenceAndRejectsStillPresent(t *testing.T) {
 	for _, testCase := range []struct {
 		present bool
@@ -232,6 +310,52 @@ func TestQueueCancelVerifiesAbsenceAndRejectsStillPresent(t *testing.T) {
 		if len(operations.calls) != 2 || operations.calls[0].name != "cancel" || operations.calls[1].name != "check" {
 			t.Fatalf("calls=%#v", operations.calls)
 		}
+	}
+}
+
+func TestQueueCancelDefaultVerificationPreservesJSONOutput(t *testing.T) {
+	operations := &stubRaidOperations{check: domain.QueueCheck{Waiting: []domain.QueueWaitingEntry{}}}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "queue", "cancel", "--pokemon", "150")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"queue cancel\",\"status\":\"cancelled\",\"data\":{\"cancelled\":true},\"warnings\":[]}\n"
+	if stdout != want || len(operations.calls) != 2 || operations.calls[0].name != "cancel" || operations.calls[1].name != "check" {
+		t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
+	}
+}
+
+func TestQueueCancelWithoutVerificationNeedsNoPokemonAndCallsCancelOnce(t *testing.T) {
+	operations := &stubRaidOperations{}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "queue", "cancel", "--verify=false")
+	if err != nil || stdout != "Avbrytningsbegäran skickades.\n" {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "cancel" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+}
+
+func TestQueueCancelWithoutVerificationRendersRequestedJSON(t *testing.T) {
+	operations := &stubRaidOperations{}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "queue", "cancel", "--verify=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"queue cancel\",\"status\":\"requested\",\"data\":{\"requested\":true,\"verified\":false},\"warnings\":[]}\n"
+	if stdout != want || len(operations.calls) != 1 || operations.calls[0].name != "cancel" {
+		t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
+	}
+}
+
+func TestQueueCancelWithoutVerificationPreservesUnknownWriteOutcome(t *testing.T) {
+	operations := &stubRaidOperations{cancelErr: output.NewError(output.CodeWriteOutcomeUnknown, "secret uncertain write")}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "queue", "cancel", "--verify=false")
+	if output.ExitCodeFor(err) != output.ExitWriteOutcomeUnknown || strings.Contains(err.Error(), "secret") || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q err=%v", output.ExitCodeFor(err), stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "cancel" {
+		t.Fatalf("calls=%#v", operations.calls)
 	}
 }
 
@@ -319,6 +443,7 @@ func TestRaidLeaveVerifiesAbsenceAndDoesNotVerifyUncertainWrite(t *testing.T) {
 func TestPrimitiveCommandsValidateBeforeCallingOperations(t *testing.T) {
 	for _, args := range [][]string{
 		{"queue", "status", "--rank", "5"},
+		{"queue", "check"},
 		{"queue", "cancel"},
 		{"lobbies", "list", "--page", "0"},
 		{"lobbies", "list", "--host-level", "41"},

@@ -28,8 +28,10 @@ go build -o raidnow ./cmd/raidnow
   --trainer-code-file ./trainer-code --rank 5 --pokemon 150 \
   --min-host-rating 3 --host-country 0 --weather-boost 0 --host-level 0
 ./raidnow --token-file ./raidnow.token queue status --rank 5 --pokemon 150
+./raidnow --token-file ./raidnow.token queue check --pokemon 150
 ./raidnow --token-file ./raidnow.token queue wait --rank 5 --pokemon 150
 ./raidnow --token-file ./raidnow.token queue cancel --pokemon 150
+./raidnow --token-file ./raidnow.token queue cancel --verify=false
 ./raidnow --token-file ./raidnow.token search \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se \
   --trainer-code-file ./trainer-code --rank 5 --pokemon 150 \
@@ -59,7 +61,7 @@ Run this in a user-owned, non-world-writable directory. On supported Bash/POSIX 
 
 When reading `--token-file`, the CLI requires a regular file, reads a bounded value and never modifies the file. Symbolic links, directories and other non-regular paths are rejected. `trainer publish` consumes the token from `--token-file`; `token get` ignores `--token-file` because it fetches a new token. Human `token get` output is exactly the token plus a newline. JSON output deliberately contains the secret too, marks `status` as `secret`, sets `containsSecret: true`, and includes a handling warning. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
 
-The form transport is stateless: callers provide the token on each request. Mutating commands are never retried automatically because a broken connection after dispatch can leave the write outcome unknown. Queue cancellation and raid leaving perform one read-back verification after an acknowledged write. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
+The form transport is stateless: callers provide the token on each request. Mutating commands are never retried automatically because a broken connection after dispatch can leave the write outcome unknown. Queue cancellation and raid leaving perform one read-back verification after an acknowledged write. `queue cancel --verify=false` sends only the primitive cancellation request; Raid NOW Lite uses this form and owns later queue checks and reconciliation. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
 
 `queue wait` only polls an existing Auto Join queue and never cancels it on timeout or interruption. `search` creates the queue once, waits in the foreground, and makes one best-effort cancel-and-check cleanup attempt after timeout or interruption. A successful match is the Auto Join result; inspect it with `raid status` when needed.
 
