@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
+	"github.com/albinmedoc/raidnow-cli/internal/metadata"
 	"github.com/albinmedoc/raidnow-cli/internal/output"
 )
 
@@ -33,13 +34,20 @@ func TestBossesListFiltersSortsAndRendersEnglishNames(t *testing.T) {
 	}
 }
 
-func TestBossesListRendersJSONView(t *testing.T) {
-	operations := &stubRaidOperations{bosses: []domain.RaidBoss{{Rank: "5", PokemonID: "150", WaitingCount: 4}}}
-	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "bosses", "list")
+func TestBossesListRendersJSONViewWithCatalogImageURLs(t *testing.T) {
+	operations := &stubRaidOperations{bosses: []domain.RaidBoss{
+		{Rank: "5", PokemonID: "150", WaitingCount: 4},
+		{Rank: "3", PokemonID: "25", WaitingCount: 2},
+	}}
+	catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"150":{"en":"Armored Mewtwo","image":"https://images.example/150.png"},"25":{"en":"Pikachu","image":""}};</script>`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","waitingCount":4}],"warnings":[]}` + "\n"
+	stdout, err := runPrimitiveCommandWithMetadata(t, operations, &stubMetadataFetcher{catalog: catalog}, "token\n", "--json", "bosses", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"https://images.example/150.png","waitingCount":4},{"rank":"3","pokemonId":"25","pokemonName":"Pikachu","imageUrl":"","waitingCount":2}],"warnings":[]}` + "\n"
 	if stdout != want {
 		t.Fatalf("stdout=%q", stdout)
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
@@ -15,6 +16,7 @@ type bossView struct {
 	Rank         string `json:"rank"`
 	PokemonID    string `json:"pokemonId"`
 	PokemonName  string `json:"pokemonName"`
+	ImageURL     string `json:"imageUrl"`
 	WaitingCount int    `json:"waitingCount"`
 }
 
@@ -70,11 +72,11 @@ func bossViews(command *cobra.Command, fetcher MetadataFetcher, bosses []domain.
 	}
 	views := make([]bossView, 0, len(bosses))
 	for _, boss := range bosses {
-		name, ok := catalogName(catalog, boss.PokemonID)
-		if !ok {
+		entry, ok := catalog.Lookup(boss.PokemonID)
+		if !ok || strings.TrimSpace(entry.NameEN) == "" {
 			return nil, metadataUnavailableError()
 		}
-		views = append(views, bossView{Rank: boss.Rank, PokemonID: boss.PokemonID, PokemonName: name, WaitingCount: boss.WaitingCount})
+		views = append(views, bossView{Rank: boss.Rank, PokemonID: boss.PokemonID, PokemonName: entry.NameEN, ImageURL: entry.ImageURL, WaitingCount: boss.WaitingCount})
 	}
 	sort.SliceStable(views, func(i, j int) bool {
 		left, _ := strconv.Atoi(views[i].Rank)

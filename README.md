@@ -63,9 +63,15 @@ The form transport is stateless: callers provide the token on each request. Muta
 
 ## Pokémon names and IDs
 
-`bosses list` lists the current Raid NOW boss catalog. `lobbies list` and `raid status` also include a `pokemonName` alongside the exact `pokemonId`. Names are the exact English values from Raid NOW's server-rendered `aryPokemon.en` catalog; form descriptors are not translated or rewritten.
+`bosses list` lists the current Raid NOW boss catalog. Its JSON entries include the exact `pokemonId`, English `pokemonName`, `rank`, `waitingCount`, and the catalog's `imageUrl` (which may be an empty string):
 
-The homepage metadata is fetched on demand only when a non-empty result needs names. It is kept in memory for that invocation and is never cached or written to disk. If metadata is unavailable, an ID is missing from the catalog, or its English name is blank, the command fails with `METADATA_UNAVAILABLE` instead of presenting the ID as a name.
+```json
+{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"https://example.invalid/pokemon/150.png","waitingCount":4}
+```
+
+`lobbies list` and `raid status` also include a `pokemonName` alongside the exact `pokemonId`. Names are the exact English values from Raid NOW's server-rendered `aryPokemon.en` catalog; form descriptors are not translated or rewritten.
+
+The homepage metadata is fetched on demand only when a non-empty result needs names. It is kept in memory for that invocation and is never cached or written to disk. If metadata is unavailable, an ID is missing from the catalog, or its English name is blank, the command fails with `METADATA_UNAVAILABLE` instead of presenting the ID as a name. A blank boss image URL remains valid and is serialized as `"imageUrl":""`.
 
 ## Trainer input
 
