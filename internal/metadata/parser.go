@@ -23,7 +23,8 @@ const (
 
 var (
 	ErrInvalidMetadata = errors.New("invalid pokemon metadata")
-	aryPokemonDecl     = regexp.MustCompile(`\b(?:var|let|const)[ \t\r\n]+aryPokemon[ \t\r\n]*=`)
+	aryPokemonDecl     = regexp.MustCompile(`\b(?:var|let|const)[ 	\r\n]+aryPokemon[ 	\r\n]*=`)
+	readyWrapperPrefix = regexp.MustCompile(`(?s)^[ 	\r\n]*jQuery[ 	\r\n]*\([ 	\r\n]*function[ 	\r\n]*\([ 	\r\n]*\$[ 	\r\n]*\)[ 	\r\n]*\{[ 	\r\n]*$`)
 )
 
 // Parse extracts exactly one server-rendered aryPokemon JSON object.
@@ -83,14 +84,11 @@ func aryPokemonObjects(source []byte) ([][]byte, error) {
 	if len(source) > MaxExecutableScriptBytes {
 		return nil, ErrInvalidMetadata
 	}
-	masked, topLevel, ok := maskJavaScript(source)
-	if !ok {
-		return nil, ErrInvalidMetadata
-	}
-	matches := aryPokemonDecl.FindAllIndex(masked, -1)
+	matches := aryPokemonDecl.FindAllIndex(source, -1)
 	objects := make([][]byte, 0, len(matches))
 	for _, match := range matches {
-		if !topLevel[match[0]] {
+		_, topLevel, prefixOK := maskJavaScript(source[:match[1]])
+		if (!prefixOK || !topLevel[match[0]]) && !readyWrapperPrefix.Match(source[:match[0]]) {
 			continue
 		}
 		start := skipJSONSpace(source, match[1])

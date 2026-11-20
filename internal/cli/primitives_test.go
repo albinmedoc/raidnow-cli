@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
+	"github.com/albinmedoc/raidnow-cli/internal/metadata"
 	"github.com/albinmedoc/raidnow-cli/internal/output"
 	"github.com/albinmedoc/raidnow-cli/internal/upstream"
 )
@@ -35,11 +36,17 @@ type stubRaidOperations struct {
 	polls        []domain.QueuePoll
 	check        domain.QueueCheck
 	raids        []domain.Raid
+	bosses       []domain.RaidBoss
 	found        *domain.Raid
 	players      domain.RaidPlayers
 	afterPoll    func(int)
 	cancelCtxErr error
 	checkCtxErr  error
+}
+
+func (stub *stubRaidOperations) ListCurrentRaidBosses(_ context.Context, token string, options upstream.CallOptions) ([]domain.RaidBoss, error) {
+	stub.calls = append(stub.calls, primitiveCall{name: "bosses", token: token, options: options})
+	return stub.bosses, stub.err
 }
 
 func (stub *stubRaidOperations) CreateMatching(_ context.Context, token string, trainer domain.Trainer, selection upstream.QueueSelection, options upstream.CallOptions) error {
@@ -106,9 +113,33 @@ func (stub *stubRaidOperations) LeaveRaid(_ context.Context, token, raidID strin
 }
 
 func runPrimitiveCommand(t *testing.T, operations *stubRaidOperations, input string, args ...string) (string, error) {
+	return runPrimitiveCommandWithMetadata(t, operations, &stubMetadataFetcher{catalog: testCatalog(t)}, input, args...)
+}
+
+type stubMetadataFetcher struct {
+	catalog metadata.Catalog
+	err     error
+	calls   int
+}
+
+func (stub *stubMetadataFetcher) Catalog(context.Context) (metadata.Catalog, error) {
+	stub.calls++
+	return stub.catalog, stub.err
+}
+
+func testCatalog(t *testing.T) metadata.Catalog {
+	t.Helper()
+	catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"150":{"en":"Armored Mewtwo"},"6_x":{"en":"Mega Charizard X"},"25":{"en":"Pikachu"}};</script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func runPrimitiveCommandWithMetadata(t *testing.T, operations *stubRaidOperations, fetcher *stubMetadataFetcher, input string, args ...string) (string, error) {
 	t.Helper()
 	var stdout bytes.Buffer
-	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, TokenFile: "-", RequestTimeout: 3 * time.Second})
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, Metadata: fetcher, TokenFile: "-", RequestTimeout: 3 * time.Second})
 	command.SetIn(strings.NewReader(input))
 	command.SetOut(&stdout)
 	command.SetErr(&bytes.Buffer{})
@@ -182,7 +213,7 @@ func TestQueueCancelVerifiesAbsenceAndRejectsStillPresent(t *testing.T) {
 func TestLobbiesListUsesFlagsAndIncludesExactIDs(t *testing.T) {
 	operations := &stubRaidOperations{raids: []domain.Raid{{ID: "raid-A", Rank: "5", PokemonID: "150"}, {ID: "raid-B", Rank: "mega", PokemonID: "6_x"}}}
 	stdout, err := runPrimitiveCommand(t, operations, "token\n", "lobbies", "list", "--page", "2", "--rank", "5", "--host-level", "50", "--exclude-pokemon", "1", "--exclude-pokemon", "2")
-	if err != nil || !strings.Contains(stdout, "raid-A") || !strings.Contains(stdout, "raid-B") {
+	if err != nil || !strings.Contains(stdout, "raid-A rank=5 name=Armored Mewtwo pokemon=150") || !strings.Contains(stdout, "raid-B rank=mega name=Mega Charizard X pokemon=6_x") {
 		t.Fatalf("stdout=%q err=%v", stdout, err)
 	}
 	call := operations.calls[0]
@@ -225,7 +256,7 @@ func TestRaidStatusFindsRaidThenListsPlayers(t *testing.T) {
 	raid := &domain.Raid{ID: "raid-9", PokemonID: "150", Count: 2}
 	operations := &stubRaidOperations{found: raid, players: domain.RaidPlayers{Count: 2, ReadyCount: 1, Players: []domain.RaidPlayer{{ID: "p1", TrainerName: "Ash123"}}}}
 	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "raid", "status", "--raid-id", "raid-9")
-	if err != nil || !strings.Contains(stdout, `"raid":{"id":"raid-9"`) || !strings.Contains(stdout, `"players":{"players":[`) {
+	if err != nil || !strings.Contains(stdout, `"raid":{"id":"raid-9"`) || !strings.Contains(stdout, `"pokemonName":"Armored Mewtwo"`) || !strings.Contains(stdout, `"players":{"players":[`) {
 		t.Fatalf("stdout=%q err=%v", stdout, err)
 	}
 	if len(operations.calls) != 2 || operations.calls[0].name != "find" || operations.calls[1].name != "players" {

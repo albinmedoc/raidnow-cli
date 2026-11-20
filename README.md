@@ -32,6 +32,8 @@ go build -o raidnow ./cmd/raidnow
 ./raidnow --token-file ./raidnow.token search \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se \
   --trainer-code-file ./trainer-code --rank 5 --pokemon 150
+./raidnow --token-file ./raidnow.token bosses list
+./raidnow --token-file ./raidnow.token bosses list --rank 5 --json
 ./raidnow --token-file ./raidnow.token lobbies list --page 1 --rank 0
 ./raidnow --token-file ./raidnow.token raid join --raid-id RAID_ID \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se
@@ -59,9 +61,11 @@ The form transport is stateless: callers provide the token on each request. Muta
 
 `queue wait` only polls an existing Auto Join queue and never cancels it on timeout or interruption. `search` creates the queue once, waits in the foreground, and makes one best-effort cancel-and-check cleanup attempt after timeout or interruption. A successful match is the Auto Join result; inspect it with `raid status` when needed.
 
-## Internal Pokémon metadata preparation
+## Pokémon names and IDs
 
-The repository includes an internal parser for Raid NOW's server-rendered `aryPokemon` data in preparation for future read commands. There is no shipped metadata command. Parsed metadata is never cached or written to disk; callers can fall back to the exact upstream Pokémon/form ID when metadata is unavailable.
+`bosses list` lists the current Raid NOW boss catalog. `lobbies list` and `raid status` also include a `pokemonName` alongside the exact `pokemonId`. Names are the exact English values from Raid NOW's server-rendered `aryPokemon.en` catalog; form descriptors are not translated or rewritten.
+
+The homepage metadata is fetched on demand only when a non-empty result needs names. It is kept in memory for that invocation and is never cached or written to disk. If metadata is unavailable, an ID is missing from the catalog, or its English name is blank, the command fails with `METADATA_UNAVAILABLE` instead of presenting the ID as a name.
 
 ## Trainer input
 

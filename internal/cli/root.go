@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/albinmedoc/raidnow-cli/internal/metadata"
 	"github.com/albinmedoc/raidnow-cli/internal/session"
 	"github.com/albinmedoc/raidnow-cli/internal/upstream"
 	"github.com/spf13/cobra"
@@ -21,6 +22,7 @@ type RootOptions struct {
 	Bootstrap      TokenBootstrapper
 	Publisher      TrainerPublisher
 	Operations     RaidOperations
+	Metadata       MetadataFetcher
 	TokenFile      string
 	RequestTimeout time.Duration
 }
@@ -31,6 +33,7 @@ func NewRootCommand() *cobra.Command {
 		Bootstrap:  session.NewBootstrap(http.DefaultClient, BootstrapURL),
 		Publisher:  client,
 		Operations: client,
+		Metadata:   metadata.NewHomepageFetcher(http.DefaultClient, BootstrapURL),
 	})
 }
 
@@ -43,6 +46,9 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	}
 	if options.Operations == nil {
 		options.Operations = defaultUpstreamClient()
+	}
+	if options.Metadata == nil {
+		options.Metadata = metadata.NewHomepageFetcher(http.DefaultClient, BootstrapURL)
 	}
 	jsonOutput := false
 	tokenFile := options.TokenFile
@@ -76,8 +82,9 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	command.AddCommand(newTrainerCommand(options.Publisher, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newQueueCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newSearchCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
-	command.AddCommand(newLobbiesCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
-	command.AddCommand(newRaidCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newBossesCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newLobbiesCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newRaidCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
 	return command
 }
 

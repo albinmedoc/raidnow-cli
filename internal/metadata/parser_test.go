@@ -71,6 +71,22 @@ func TestParseUsesExecutableScriptsAndIgnoresCheapDecoys(t *testing.T) {
 	}
 }
 
+func TestParseDoesNotRejectValidCatalogForUnrelatedLaterJavaScript(t *testing.T) {
+	body := []byte(`<script>var aryPokemon={"right":{"en":"Right"}}; const pattern = /{/; function later(){</script>`)
+	catalog, err := Parse(body)
+	if err != nil || catalog.Len() != 1 {
+		t.Fatalf("Parse Len()=%d err=%v, want valid catalog", catalog.Len(), err)
+	}
+}
+
+func TestParseAcceptsCurrentJQueryReadyWrapper(t *testing.T) {
+	body := []byte(`<script>jQuery(function($){ var aryPokemon={"right":{"en":"Right"}}; });</script>`)
+	catalog, err := Parse(body)
+	if err != nil || catalog.Len() != 1 {
+		t.Fatalf("Parse Len()=%d err=%v, want wrapped catalog", catalog.Len(), err)
+	}
+}
+
 func TestParseRequiresExactlyOneCompleteObjectDeclaration(t *testing.T) {
 	for _, body := range []string{
 		`<script>const other={};</script>`,

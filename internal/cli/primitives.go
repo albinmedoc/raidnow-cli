@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
+	"github.com/albinmedoc/raidnow-cli/internal/metadata"
 	"github.com/albinmedoc/raidnow-cli/internal/output"
 	"github.com/albinmedoc/raidnow-cli/internal/session"
 	"github.com/albinmedoc/raidnow-cli/internal/upstream"
@@ -14,6 +16,7 @@ import (
 
 // RaidOperations is the narrow stateless upstream surface used by primitive commands.
 type RaidOperations interface {
+	ListCurrentRaidBosses(context.Context, string, upstream.CallOptions) ([]domain.RaidBoss, error)
 	CreateMatching(context.Context, string, domain.Trainer, upstream.QueueSelection, upstream.CallOptions) error
 	PollMatching(context.Context, string, upstream.QueueSelection, upstream.CallOptions) (domain.QueuePoll, error)
 	CancelMatching(context.Context, string, upstream.CallOptions) error
@@ -23,6 +26,10 @@ type RaidOperations interface {
 	FindRaid(context.Context, string, string, upstream.CallOptions) (*domain.Raid, error)
 	ListRaidPlayers(context.Context, string, string, upstream.CallOptions) (domain.RaidPlayers, error)
 	LeaveRaid(context.Context, string, string, upstream.CallOptions) error
+}
+
+type MetadataFetcher interface {
+	Catalog(context.Context) (metadata.Catalog, error)
 }
 
 func newQueueCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
@@ -135,7 +142,7 @@ func newQueueCancelCommand(operations RaidOperations, tokenFile *string, request
 	return command
 }
 
-func newLobbiesCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+func newLobbiesCommand(operations RaidOperations, metadataFetcher MetadataFetcher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
 	command := &cobra.Command{Use: "lobbies", Short: "List raid lobbies", Args: usageNoArgs}
 	command.RunE = helpRun
 	var page, hostLevel int
@@ -161,11 +168,15 @@ func newLobbiesCommand(operations RaidOperations, tokenFile *string, requestTime
 		if raids == nil {
 			raids = []domain.Raid{}
 		}
-		if *jsonOutput {
-			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("lobbies list", "listed", raids, nil))
+		views, err := raidViews(command.Context(), metadataFetcher, raids)
+		if err != nil {
+			return err
 		}
-		for _, raid := range raids {
-			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s rank=%s pokemon=%s players=%d/%d\n", raid.ID, raid.Rank, raid.PokemonID, raid.Count, raid.MaxUsers); err != nil {
+		if *jsonOutput {
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("lobbies list", "listed", views, nil))
+		}
+		for _, raid := range views {
+			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s rank=%s name=%s pokemon=%s players=%d/%d\n", raid.ID, raid.Rank, raid.PokemonName, raid.PokemonID, raid.Count, raid.MaxUsers); err != nil {
 				return err
 			}
 		}
@@ -175,11 +186,11 @@ func newLobbiesCommand(operations RaidOperations, tokenFile *string, requestTime
 	return command
 }
 
-func newRaidCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+func newRaidCommand(operations RaidOperations, metadataFetcher MetadataFetcher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
 	command := &cobra.Command{Use: "raid", Short: "Join, inspect, or leave a raid", Args: usageNoArgs}
 	command.RunE = helpRun
 	command.AddCommand(newRaidJoinCommand(operations, tokenFile, requestTimeout, jsonOutput))
-	command.AddCommand(newRaidStatusCommand(operations, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newRaidStatusCommand(operations, metadataFetcher, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newRaidLeaveCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	return command
 }
@@ -220,7 +231,7 @@ func newRaidJoinCommand(operations RaidOperations, tokenFile *string, requestTim
 	return command
 }
 
-func newRaidStatusCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+func newRaidStatusCommand(operations RaidOperations, metadataFetcher MetadataFetcher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
 	var raidID string
 	command := &cobra.Command{Use: "status", Short: "Read one raid and its players", Args: usageNoArgs}
 	command.Flags().StringVar(&raidID, "raid-id", "", "Exact raid ID")
@@ -240,18 +251,22 @@ func newRaidStatusCommand(operations RaidOperations, tokenFile *string, requestT
 		if raid == nil {
 			return output.NewError(output.CodeNotFound, "Raiden hittades inte.")
 		}
+		view, err := raidViewFor(command.Context(), metadataFetcher, *raid)
+		if err != nil {
+			return err
+		}
 		players, err := operations.ListRaidPlayers(command.Context(), token, raidID, options)
 		if err != nil {
 			return sanitizedPublisherError(err)
 		}
 		data := struct {
-			Raid    domain.Raid        `json:"raid"`
+			Raid    raidView           `json:"raid"`
 			Players domain.RaidPlayers `json:"players"`
-		}{Raid: *raid, Players: players}
+		}{Raid: view, Players: players}
 		if *jsonOutput {
 			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("raid status", "found", data, nil))
 		}
-		_, err = fmt.Fprintf(command.OutOrStdout(), "%s pokemon=%s players=%d ready=%d\n", raid.ID, raid.PokemonID, players.Count, players.ReadyCount)
+		_, err = fmt.Fprintf(command.OutOrStdout(), "%s name=%s pokemon=%s players=%d ready=%d\n", raid.ID, view.PokemonName, raid.PokemonID, players.Count, players.ReadyCount)
 		return err
 	}
 	return command
@@ -334,3 +349,58 @@ func validHostLevel(level int) bool {
 }
 
 func helpRun(command *cobra.Command, _ []string) error { return command.Help() }
+
+type raidView struct {
+	domain.Raid
+	PokemonName string `json:"pokemonName"`
+}
+
+func raidViews(ctx context.Context, fetcher MetadataFetcher, raids []domain.Raid) ([]raidView, error) {
+	if len(raids) == 0 {
+		return []raidView{}, nil
+	}
+	catalog, err := fetchCatalog(ctx, fetcher)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]raidView, 0, len(raids))
+	for _, raid := range raids {
+		name, ok := catalogName(catalog, raid.PokemonID)
+		if !ok {
+			return nil, metadataUnavailableError()
+		}
+		views = append(views, raidView{Raid: raid, PokemonName: name})
+	}
+	return views, nil
+}
+
+func raidViewFor(ctx context.Context, fetcher MetadataFetcher, raid domain.Raid) (raidView, error) {
+	views, err := raidViews(ctx, fetcher, []domain.Raid{raid})
+	if err != nil {
+		return raidView{}, err
+	}
+	return views[0], nil
+}
+
+func fetchCatalog(ctx context.Context, fetcher MetadataFetcher) (metadata.Catalog, error) {
+	if fetcher == nil {
+		return metadata.Catalog{}, metadataUnavailableError()
+	}
+	catalog, err := fetcher.Catalog(ctx)
+	if err != nil {
+		return metadata.Catalog{}, metadataUnavailableError()
+	}
+	return catalog, nil
+}
+
+func catalogName(catalog metadata.Catalog, id string) (string, bool) {
+	entry, ok := catalog.Lookup(id)
+	if !ok || strings.TrimSpace(entry.NameEN) == "" {
+		return "", false
+	}
+	return entry.NameEN, true
+}
+
+func metadataUnavailableError() error {
+	return output.NewError(output.CodeMetadataUnavailable, "Pokémonmetadata är inte tillgänglig.")
+}
