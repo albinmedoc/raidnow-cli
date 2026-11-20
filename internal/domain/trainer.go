@@ -19,18 +19,41 @@ var ErrInvalidTrainer = errors.New("invalid trainer")
 // Trainer is the normalized, per-invocation trainer identity used in upstream forms.
 // Its fields are intentionally private so callers must choose an explicit form accessor.
 type Trainer struct {
+	identity TrainerIdentity
+	code     string
+}
+
+// TrainerIdentity is the validated trainer identity required to join a raid.
+type TrainerIdentity struct {
 	name    string
-	code    string
 	level   int
 	country string
 }
 
-func NewTrainer(name, code string, level int, country string) (Trainer, error) {
+func NewTrainerIdentity(name string, level int, country string) (TrainerIdentity, error) {
 	if hasUnsafeTrainerText(name) {
-		return Trainer{}, ErrInvalidTrainer
+		return TrainerIdentity{}, ErrInvalidTrainer
 	}
 	name = strings.TrimSpace(name)
 	if len(name) < 3 || !isASCIIAlphanumeric(name) {
+		return TrainerIdentity{}, ErrInvalidTrainer
+	}
+	if level < 1 || level > 80 {
+		return TrainerIdentity{}, ErrInvalidTrainer
+	}
+	if hasUnsafeTrainerText(country) {
+		return TrainerIdentity{}, ErrInvalidTrainer
+	}
+	country = strings.ToLower(strings.TrimSpace(country))
+	if country == "" || len(country) > MaxCountryBytes {
+		return TrainerIdentity{}, ErrInvalidTrainer
+	}
+	return TrainerIdentity{name: name, level: level, country: country}, nil
+}
+
+func NewTrainer(name, code string, level int, country string) (Trainer, error) {
+	identity, err := NewTrainerIdentity(name, level, country)
+	if err != nil {
 		return Trainer{}, ErrInvalidTrainer
 	}
 
@@ -47,19 +70,7 @@ func NewTrainer(name, code string, level int, country string) (Trainer, error) {
 		return Trainer{}, ErrInvalidTrainer
 	}
 
-	if level < 1 || level > 80 {
-		return Trainer{}, ErrInvalidTrainer
-	}
-
-	if hasUnsafeTrainerText(country) {
-		return Trainer{}, ErrInvalidTrainer
-	}
-	country = strings.ToLower(strings.TrimSpace(country))
-	if country == "" || len(country) > MaxCountryBytes {
-		return Trainer{}, ErrInvalidTrainer
-	}
-
-	return Trainer{name: name, code: code, level: level, country: country}, nil
+	return Trainer{identity: identity, code: code}, nil
 }
 
 func hasUnsafeTrainerText(value string) bool {
@@ -94,7 +105,7 @@ func isASCIIDigits(value string) bool {
 }
 
 func (trainer Trainer) NameFormValue() string {
-	return trainer.name
+	return trainer.identity.NameFormValue()
 }
 
 func (trainer Trainer) CodeFormValue() string {
@@ -102,20 +113,26 @@ func (trainer Trainer) CodeFormValue() string {
 }
 
 func (trainer Trainer) LevelFormValue() string {
-	return strconv.Itoa(trainer.level)
+	return trainer.identity.LevelFormValue()
 }
 
 func (trainer Trainer) CountryFormValue() string {
-	return trainer.country
+	return trainer.identity.CountryFormValue()
 }
+
+func (identity TrainerIdentity) NameFormValue() string { return identity.name }
+
+func (identity TrainerIdentity) LevelFormValue() string { return strconv.Itoa(identity.level) }
+
+func (identity TrainerIdentity) CountryFormValue() string { return identity.country }
 
 // Format prevents generic debug formatting from disclosing the trainer code.
 func (trainer Trainer) Format(state fmt.State, _ rune) {
 	_, _ = io.WriteString(state, "Trainer{name:")
-	_, _ = io.WriteString(state, trainer.name)
+	_, _ = io.WriteString(state, trainer.identity.name)
 	_, _ = io.WriteString(state, ", code:[redacted], level:")
-	_, _ = io.WriteString(state, strconv.Itoa(trainer.level))
+	_, _ = io.WriteString(state, strconv.Itoa(trainer.identity.level))
 	_, _ = io.WriteString(state, ", country:")
-	_, _ = io.WriteString(state, trainer.country)
+	_, _ = io.WriteString(state, trainer.identity.country)
 	_, _ = io.WriteString(state, "}")
 }

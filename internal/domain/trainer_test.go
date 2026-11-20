@@ -103,3 +103,31 @@ func TestTrainerFormattingNeverExposesCode(t *testing.T) {
 		}
 	}
 }
+
+func TestNewTrainerIdentityNormalizesValidatedValues(t *testing.T) {
+	identity, err := NewTrainerIdentity(" Ash123 ", 80, " WORLD ")
+	if err != nil {
+		t.Fatalf("new trainer identity: %v", err)
+	}
+	if identity.NameFormValue() != "Ash123" || identity.LevelFormValue() != "80" || identity.CountryFormValue() != "world" {
+		t.Fatalf("identity=%+v", identity)
+	}
+}
+
+func TestNewTrainerIdentityRejectsInvalidValues(t *testing.T) {
+	for _, values := range []struct {
+		name    string
+		level   int
+		country string
+	}{
+		{name: "A!", level: 50, country: "se"},
+		{name: "Ash123", level: 0, country: "se"},
+		{name: "Ash123", level: 81, country: "se"},
+		{name: "Ash123", level: 50, country: ""},
+		{name: "Ash123", level: 50, country: "SE\n"},
+	} {
+		if _, err := NewTrainerIdentity(values.name, values.level, values.country); err == nil {
+			t.Fatalf("NewTrainerIdentity(%q, %d, %q) succeeded", values.name, values.level, values.country)
+		}
+	}
+}

@@ -20,14 +20,17 @@ var (
 type RootOptions struct {
 	Bootstrap      TokenBootstrapper
 	Publisher      TrainerPublisher
+	Operations     RaidOperations
 	TokenFile      string
 	RequestTimeout time.Duration
 }
 
 func NewRootCommand() *cobra.Command {
+	client := defaultUpstreamClient()
 	return NewRootCommandWithOptions(RootOptions{
-		Bootstrap: session.NewBootstrap(http.DefaultClient, BootstrapURL),
-		Publisher: defaultTrainerPublisher(),
+		Bootstrap:  session.NewBootstrap(http.DefaultClient, BootstrapURL),
+		Publisher:  client,
+		Operations: client,
 	})
 }
 
@@ -37,6 +40,9 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	}
 	if options.Publisher == nil {
 		options.Publisher = defaultTrainerPublisher()
+	}
+	if options.Operations == nil {
+		options.Operations = defaultUpstreamClient()
 	}
 	jsonOutput := false
 	tokenFile := options.TokenFile
@@ -68,13 +74,20 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	})
 	command.AddCommand(newTokenCommand(options.Bootstrap, &jsonOutput))
 	command.AddCommand(newTrainerCommand(options.Publisher, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newQueueCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newLobbiesCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newRaidCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
 	return command
 }
 
 func defaultTrainerPublisher() TrainerPublisher {
-	publisher, err := upstream.NewClient(upstream.Config{})
+	return defaultUpstreamClient()
+}
+
+func defaultUpstreamClient() *upstream.Client {
+	client, err := upstream.NewClient(upstream.Config{})
 	if err != nil {
 		return nil
 	}
-	return publisher
+	return client
 }

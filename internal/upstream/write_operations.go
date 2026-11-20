@@ -27,8 +27,80 @@ func (client *Client) PublishTrainer(ctx context.Context, token string, trainer 
 	if err != nil {
 		return err
 	}
+	return acknowledgeWrite(UserInfoPost, raw)
+}
+
+// CreateMatching creates one Auto Join queue selection without retrying writes.
+func (client *Client) CreateMatching(ctx context.Context, token string, trainer domain.Trainer, selection QueueSelection, options CallOptions) error {
+	ranks, pokemon, selectionOK := normalizeSelectionPairs(selection.Ranks, selection.PokemonIDs)
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || !selectionOK || len(ranks) == 0 || !safeOptionalValue(selection.GuestEvalStar) ||
+		trainer.NameFormValue() == "" || trainer.CodeFormValue() == "" || trainer.LevelFormValue() == "0" || trainer.CountryFormValue() == "" {
+		return invalidArguments("Ogiltigt köurval.")
+	}
+	form := url.Values{
+		"rank[]": ranks, "pokemon[]": pokemon, "code": {trainer.CodeFormValue()}, "tid": {trainer.NameFormValue()},
+		"level": {trainer.LevelFormValue()}, "priority": {"0"}, "lang": {"1"}, "gscore": {selection.GuestEvalStar},
+		"country_code": {trainer.CountryFormValue()}, "plugs": {"[]"}, "host_country": {"0"}, "weather_boost": {"0"},
+		"guest6": {"0"}, "regional_raid": {"0"}, "token": {token}, "hosteval[]": {"-1", "0", "1", "2"}, "hosttl": {"0"},
+	}
+	raw, err := client.PostForm(ctx, LineMatchingCreate, form, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeWrite(LineMatchingCreate, raw)
+}
+
+// CancelMatching cancels the current Auto Join queue without retrying writes.
+func (client *Client) CancelMatching(ctx context.Context, token string, options CallOptions) error {
+	if ctx == nil || !session.AnonymousTokenIsValid(token) {
+		return invalidArguments("Ogiltig anonym token.")
+	}
+	raw, err := client.PostForm(ctx, LineMatchingCancel, url.Values{"lang": {"1"}, "token": {token}}, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeWrite(LineMatchingCancel, raw)
+}
+
+// JoinRaid submits one trainer identity to a raid without retrying writes.
+func (client *Client) JoinRaid(ctx context.Context, token, raidID string, identity domain.TrainerIdentity, options CallOptions) error {
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || !safeValue(raidID, true) || identity.NameFormValue() == "" || identity.LevelFormValue() == "0" || identity.CountryFormValue() == "" {
+		return invalidArguments("Ogiltig raidanslutning.")
+	}
+	form := url.Values{
+		"parid": {raidID}, "tid": {identity.NameFormValue()}, "show": {"0"}, "level": {identity.LevelFormValue()},
+		"color": {"0"}, "memo": {""}, "lang": {"1"}, "country_code": {identity.CountryFormValue()},
+		"regional_raid": {"0"}, "token": {token},
+	}
+	raw, err := client.PostForm(ctx, ChildPostFast, form, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeWrite(ChildPostFast, raw)
+}
+
+// LeaveRaid removes the anonymous trainer from one raid without retrying writes.
+func (client *Client) LeaveRaid(ctx context.Context, token, raidID string, options CallOptions) error {
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || !safeValue(raidID, true) {
+		return invalidArguments("Ogiltigt raid-id.")
+	}
+	raw, err := client.PostForm(ctx, GuestRaidDelPost, url.Values{"edit": {raidID}, "lang": {"1"}, "token": {token}}, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeWrite(GuestRaidDelPost, raw)
+}
+
+func acknowledgeWrite(operation Operation, raw []byte) error {
 	if len(raw) == 0 {
-		return nil
+		descriptor, err := operation.Descriptor()
+		if err != nil {
+			return err
+		}
+		if descriptor.AllowsEmptyResponse() {
+			return nil
+		}
+		return upstreamRejection()
 	}
 	object, err := decodeObject(raw)
 	if err != nil {
