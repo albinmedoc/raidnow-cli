@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/albinmedoc/raidnow-cli/internal/cli"
@@ -15,7 +17,11 @@ func main() {
 }
 
 func run(arguments []string, stdout, stderr io.Writer) int {
-	return runCommand(arguments, stdout, stderr, cli.NewRootCommand())
+	command := cli.NewRootCommand()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	command.SetContext(ctx)
+	return runCommand(arguments, stdout, stderr, command)
 }
 
 func runWithOptions(arguments []string, stdout, stderr io.Writer, options cli.RootOptions) int {

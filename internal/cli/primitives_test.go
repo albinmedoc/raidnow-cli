@@ -25,29 +25,63 @@ type primitiveCall struct {
 }
 
 type stubRaidOperations struct {
-	calls   []primitiveCall
-	err     error
-	poll    domain.QueuePoll
-	check   domain.QueueCheck
-	raids   []domain.Raid
-	found   *domain.Raid
-	players domain.RaidPlayers
+	calls        []primitiveCall
+	err          error
+	createErr    error
+	pollErr      error
+	cancelErr    error
+	checkErr     error
+	poll         domain.QueuePoll
+	polls        []domain.QueuePoll
+	check        domain.QueueCheck
+	raids        []domain.Raid
+	found        *domain.Raid
+	players      domain.RaidPlayers
+	afterPoll    func(int)
+	cancelCtxErr error
+	checkCtxErr  error
 }
 
 func (stub *stubRaidOperations) CreateMatching(_ context.Context, token string, trainer domain.Trainer, selection upstream.QueueSelection, options upstream.CallOptions) error {
 	stub.calls = append(stub.calls, primitiveCall{name: "create", token: token, trainer: trainer, selection: selection, options: options})
+	if stub.createErr != nil {
+		return stub.createErr
+	}
 	return stub.err
 }
 func (stub *stubRaidOperations) PollMatching(_ context.Context, token string, selection upstream.QueueSelection, options upstream.CallOptions) (domain.QueuePoll, error) {
 	stub.calls = append(stub.calls, primitiveCall{name: "poll", token: token, selection: selection, options: options})
+	pollNumber := 0
+	for _, call := range stub.calls {
+		if call.name == "poll" {
+			pollNumber++
+		}
+	}
+	if stub.afterPoll != nil {
+		stub.afterPoll(pollNumber)
+	}
+	if stub.pollErr != nil {
+		return domain.QueuePoll{}, stub.pollErr
+	}
+	if pollNumber <= len(stub.polls) {
+		return stub.polls[pollNumber-1], nil
+	}
 	return stub.poll, stub.err
 }
-func (stub *stubRaidOperations) CancelMatching(_ context.Context, token string, options upstream.CallOptions) error {
+func (stub *stubRaidOperations) CancelMatching(ctx context.Context, token string, options upstream.CallOptions) error {
 	stub.calls = append(stub.calls, primitiveCall{name: "cancel", token: token, options: options})
+	stub.cancelCtxErr = ctx.Err()
+	if stub.cancelErr != nil {
+		return stub.cancelErr
+	}
 	return stub.err
 }
-func (stub *stubRaidOperations) CheckMatching(_ context.Context, token string, pokemon []string, options upstream.CallOptions) (domain.QueueCheck, error) {
+func (stub *stubRaidOperations) CheckMatching(ctx context.Context, token string, pokemon []string, options upstream.CallOptions) (domain.QueueCheck, error) {
 	stub.calls = append(stub.calls, primitiveCall{name: "check", token: token, pokemon: pokemon, options: options})
+	stub.checkCtxErr = ctx.Err()
+	if stub.checkErr != nil {
+		return domain.QueueCheck{}, stub.checkErr
+	}
 	return stub.check, stub.err
 }
 func (stub *stubRaidOperations) ListRaids(_ context.Context, token string, query upstream.LobbyQuery, options upstream.CallOptions) ([]domain.Raid, error) {

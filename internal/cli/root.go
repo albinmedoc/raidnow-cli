@@ -75,6 +75,7 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	command.AddCommand(newTokenCommand(options.Bootstrap, &jsonOutput))
 	command.AddCommand(newTrainerCommand(options.Publisher, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newQueueCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newSearchCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newLobbiesCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newRaidCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
 	return command

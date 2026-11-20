@@ -19,6 +19,7 @@ import (
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
 	"github.com/albinmedoc/raidnow-cli/internal/output"
 	"github.com/albinmedoc/raidnow-cli/internal/upstream"
+	"github.com/spf13/cobra"
 )
 
 type failFirstWriter struct {
@@ -127,6 +128,24 @@ func TestVersionWriterFailureIsSanitizedInternalError(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "SECRET-WRITER-FAILURE") {
 		t.Fatalf("stderr leaked writer error: %q", stderr.String())
+	}
+}
+
+func TestRunCommandPreservesTestProvidedContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	command := &cobra.Command{
+		Use: "test",
+		RunE: func(command *cobra.Command, _ []string) error {
+			if command.Context().Err() != context.Canceled {
+				t.Fatalf("context error=%v, want canceled", command.Context().Err())
+			}
+			return nil
+		},
+	}
+	command.SetContext(ctx)
+	if exit := runCommand(nil, &strings.Builder{}, &strings.Builder{}, command); exit != output.ExitSuccess {
+		t.Fatalf("exit=%d", exit)
 	}
 }
 

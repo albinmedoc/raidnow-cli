@@ -30,6 +30,7 @@ func newQueueCommand(operations RaidOperations, tokenFile *string, requestTimeou
 	command.RunE = helpRun
 	command.AddCommand(newQueueJoinCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newQueueStatusCommand(operations, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newQueueWaitCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newQueueCancelCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	return command
 }
