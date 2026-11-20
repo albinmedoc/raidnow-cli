@@ -45,17 +45,20 @@ type RaidPlayers struct {
 
 // Raid is a bounded normalized lobby or matched-raid view.
 type Raid struct {
-	ID         string `json:"id"`
-	Rank       string `json:"rank"`
-	PokemonID  string `json:"pokemonId"`
-	HostName   string `json:"hostName,omitempty"`
-	HostLevel  int    `json:"hostLevel"`
-	Country    string `json:"country,omitempty"`
-	Weather    int    `json:"weather"`
-	MaxUsers   int    `json:"maxUsers"`
-	Count      int    `json:"count"`
-	ReadyCount int    `json:"readyCount"`
-	JoinState  *int   `json:"joinState,omitempty"`
+	ID                string `json:"id"`
+	Rank              string `json:"rank"`
+	PokemonID         string `json:"pokemonId"`
+	HostName          string `json:"hostName,omitempty"`
+	HostLevel         int    `json:"hostLevel"`
+	Country           string `json:"country,omitempty"`
+	Weather           int    `json:"weather"`
+	MaxUsers          int    `json:"maxUsers"`
+	Count             int    `json:"count"`
+	ReadyCount        int    `json:"readyCount"`
+	JoinState         *int   `json:"joinState,omitempty"`
+	Deleted           bool   `json:"deleted"`
+	IsMe              bool   `json:"isMe"`
+	MinimumGuestLevel int    `json:"minimumGuestLevel"`
 }
 
 // RaidBoss is one exact species/form selection exposed by Auto Join.

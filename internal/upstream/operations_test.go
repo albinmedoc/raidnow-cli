@@ -72,6 +72,64 @@ func TestListRaidsPostsExactQueryAndNormalizesObjectList(t *testing.T) {
 	})
 }
 
+func TestListRaidsNormalizesLiteSelectionFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`[
+			{"rpl_id":"numeric","rpl_deleted":1,"my":0,"rpl_glevel":40},
+			{"rpl_id":"string","rpl_deleted":"0","my":"1","rpl_glevel":"50"},
+			{"rpl_id":"missing"}
+		]`))
+	}))
+	defer server.Close()
+	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+
+	got, err := client.ListRaids(context.Background(), "token", LobbyQuery{Page: 1}, CallOptions{})
+	if err != nil {
+		t.Fatalf("list raids: %v", err)
+	}
+	want := []domain.Raid{
+		{ID: "numeric", Deleted: true, MinimumGuestLevel: 40},
+		{ID: "string", IsMe: true, MinimumGuestLevel: 50},
+		{ID: "missing"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("raids = %#v, want %#v", got, want)
+	}
+}
+
+func TestListRaidsRejectsMalformedLiteSelectionFields(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		field string
+	}{
+		{name: "deleted negative", field: `"rpl_deleted":-1`},
+		{name: "deleted above range", field: `"rpl_deleted":2`},
+		{name: "deleted boolean", field: `"rpl_deleted":true`},
+		{name: "deleted blank", field: `"rpl_deleted":""`},
+		{name: "deleted padded", field: `"rpl_deleted":" 1 "`},
+		{name: "deleted null", field: `"rpl_deleted":null`},
+		{name: "is me negative", field: `"my":-1`},
+		{name: "is me above range", field: `"my":"2"`},
+		{name: "is me object", field: `"my":{}`},
+		{name: "minimum level null", field: `"rpl_glevel":null`},
+		{name: "minimum level negative", field: `"rpl_glevel":-1`},
+		{name: "minimum level fractional", field: `"rpl_glevel":"1.5"`},
+		{name: "minimum level blank", field: `"rpl_glevel":""`},
+		{name: "minimum level boolean", field: `"rpl_glevel":false`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			body := `[{"rpl_id":"raid",` + testCase.field + `}]`
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(body))
+			}))
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+			_, err := client.ListRaids(context.Background(), "token", LobbyQuery{Page: 1}, CallOptions{})
+			server.Close()
+			assertExitCode(t, err, output.ExitUpstreamRejection)
+		})
+	}
+}
+
 func TestListRaidsAcceptsTopLevelArrayAndRejectsMalformedEntries(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string

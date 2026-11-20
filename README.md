@@ -39,6 +39,8 @@ go build -o raidnow ./cmd/raidnow
 ./raidnow --token-file ./raidnow.token bosses list
 ./raidnow --token-file ./raidnow.token bosses list --rank 5 --json
 ./raidnow --token-file ./raidnow.token lobbies list --page 1 --rank 0
+./raidnow --token-file ./raidnow.token --json lobbies list \
+  --min-host-rating 3 --include-metadata=false
 ./raidnow --token-file ./raidnow.token raid join --raid-id RAID_ID \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se
 ./raidnow --token-file ./raidnow.token raid status --raid-id RAID_ID
@@ -75,7 +77,7 @@ The form transport is stateless: callers provide the token on each request. Muta
 {"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"https://example.invalid/pokemon/150.png","waitingCount":4}
 ```
 
-`lobbies list` and `raid status` also include a `pokemonName` alongside the exact `pokemonId`. Names are the exact English values from Raid NOW's server-rendered `aryPokemon.en` catalog; form descriptors are not translated or rewritten.
+By default, `lobbies list` and `raid status` include a `pokemonName` alongside the exact `pokemonId`. Names are the exact English values from Raid NOW's server-rendered `aryPokemon.en` catalog; form descriptors are not translated or rewritten. Raid NOW Lite scans lobbies with `--include-metadata=false` and joins exact Pokémon IDs to names and images from its separately cached `bosses list` results.
 
 The homepage metadata is fetched on demand only when a non-empty result needs names. It is kept in memory for that invocation and is never cached or written to disk. If metadata is unavailable, an ID is missing from the catalog, or its English name is blank, the command fails with `METADATA_UNAVAILABLE` instead of presenting the ID as a name. A blank boss image URL remains valid and is serialized as `"imageUrl":""`.
 

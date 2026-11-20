@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -120,10 +122,14 @@ type stubMetadataFetcher struct {
 	catalog metadata.Catalog
 	err     error
 	calls   int
+	panic   bool
 }
 
 func (stub *stubMetadataFetcher) Catalog(context.Context) (metadata.Catalog, error) {
 	stub.calls++
+	if stub.panic {
+		panic("metadata fetch must not be called")
+	}
 	return stub.catalog, stub.err
 }
 
@@ -368,6 +374,67 @@ func TestLobbiesListUsesFlagsAndIncludesExactIDs(t *testing.T) {
 	call := operations.calls[0]
 	if call.name != "list" || call.query.Page != 2 || call.query.SearchRank != "5" || call.query.HostLevel != 50 || len(call.query.Filters) != 2 {
 		t.Fatalf("call=%+v", call)
+	}
+}
+
+func TestLobbiesListMapsMinimumHostRating(t *testing.T) {
+	for _, testCase := range []struct {
+		minimum int
+		want    []int
+	}{
+		{minimum: -1, want: []int{}},
+		{minimum: 0, want: []int{-1}},
+		{minimum: 3, want: []int{-1, 0, 1, 2}},
+		{minimum: 5, want: []int{-1, 0, 1, 2, 3, 4}},
+	} {
+		t.Run(fmt.Sprint(testCase.minimum), func(t *testing.T) {
+			operations := &stubRaidOperations{}
+			_, err := runPrimitiveCommand(t, operations, "token\n", "lobbies", "list", "--min-host-rating", fmt.Sprint(testCase.minimum))
+			if err != nil || len(operations.calls) != 1 {
+				t.Fatalf("err=%v calls=%#v", err, operations.calls)
+			}
+			if got := operations.calls[0].query.HostEvaluate; !reflect.DeepEqual(got, testCase.want) {
+				t.Fatalf("host evaluate=%v want=%v", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestLobbiesListRejectsInvalidMinimumHostRatingBeforeTokenOrNetwork(t *testing.T) {
+	for _, minimum := range []string{"-2", "6"} {
+		operations := &stubRaidOperations{}
+		command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, TokenFile: "-", RequestTimeout: time.Second})
+		command.SetIn(panicReader{})
+		command.SetOut(&bytes.Buffer{})
+		command.SetErr(&bytes.Buffer{})
+		command.SetArgs([]string{"lobbies", "list", "--min-host-rating", minimum})
+		err := command.Execute()
+		if output.ExitCodeFor(err) != output.ExitInvalidArguments || len(operations.calls) != 0 {
+			t.Fatalf("minimum=%s exit=%d calls=%#v err=%v", minimum, output.ExitCodeFor(err), operations.calls, err)
+		}
+	}
+}
+
+func TestLobbiesListCanSkipMetadata(t *testing.T) {
+	raid := domain.Raid{ID: "raid-A", Rank: "5", PokemonID: "150", Deleted: true, IsMe: true, MinimumGuestLevel: 40}
+	operations := &stubRaidOperations{raids: []domain.Raid{raid}}
+	fetcher := &stubMetadataFetcher{panic: true}
+	stdout, err := runPrimitiveCommandWithMetadata(t, operations, fetcher, "token\n", "--json", "lobbies", "list", "--include-metadata=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"deleted":true`, `"isMe":true`, `"minimumGuestLevel":40`} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout=%q missing %s", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "pokemonName") || fetcher.calls != 0 {
+		t.Fatalf("stdout=%q metadata calls=%d", stdout, fetcher.calls)
+	}
+
+	stdout, err = runPrimitiveCommandWithMetadata(t, operations, fetcher, "token\n", "lobbies", "list", "--include-metadata=false")
+	if err != nil || stdout != "raid-A rank=5 pokemon=150 players=0/0\n" || fetcher.calls != 0 {
+		t.Fatalf("stdout=%q err=%v metadata calls=%d", stdout, err, fetcher.calls)
 	}
 }
 

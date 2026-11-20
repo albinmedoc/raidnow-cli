@@ -416,10 +416,45 @@ func decodeRaidEntry(entry map[string]any) (domain.Raid, bool) {
 	if !ok {
 		return domain.Raid{}, false
 	}
+	deleted, ok := strictOptionalZeroOne(entry, "rpl_deleted")
+	if !ok {
+		return domain.Raid{}, false
+	}
+	isMe, ok := strictOptionalZeroOne(entry, "my")
+	if !ok {
+		return domain.Raid{}, false
+	}
+	if value, present := entry["rpl_glevel"]; present && value == nil {
+		return domain.Raid{}, false
+	}
+	minimumGuestLevel, ok := optionalNonnegativeInt(entry, "rpl_glevel", 0)
+	if !ok {
+		return domain.Raid{}, false
+	}
 	return domain.Raid{
 		ID: id, Rank: rank, PokemonID: pokemon, HostName: host, HostLevel: hostLevel, Country: country,
 		Weather: weather, MaxUsers: maxUsers, Count: count, ReadyCount: readyCount, JoinState: joinState,
+		Deleted: deleted, IsMe: isMe, MinimumGuestLevel: minimumGuestLevel,
 	}, true
+}
+
+func strictOptionalZeroOne(object map[string]any, key string) (bool, bool) {
+	value, present := object[key]
+	if !present {
+		return false, true
+	}
+	text, ok := exactScalar(value)
+	if !ok {
+		return false, false
+	}
+	switch text {
+	case "0":
+		return false, true
+	case "1":
+		return true, true
+	default:
+		return false, false
+	}
 }
 
 func strictOptionalBoundedScalar(object map[string]any, key string) (string, bool) {

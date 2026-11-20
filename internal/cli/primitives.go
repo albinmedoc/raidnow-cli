@@ -192,38 +192,54 @@ func newQueueCancelCommand(operations RaidOperations, tokenFile *string, request
 func newLobbiesCommand(operations RaidOperations, metadataFetcher MetadataFetcher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
 	command := &cobra.Command{Use: "lobbies", Short: "List raid lobbies", Args: usageNoArgs}
 	command.RunE = helpRun
-	var page, hostLevel int
+	var page, hostLevel, minimumHostRating int
 	var rank string
 	var excluded []string
+	var includeMetadata bool
 	list := &cobra.Command{Use: "list", Short: "List one raid lobby page", Args: usageNoArgs}
 	list.Flags().IntVar(&page, "page", 1, "Lobby page")
 	list.Flags().StringVar(&rank, "rank", "0", "Raid rank filter")
 	list.Flags().IntVar(&hostLevel, "host-level", 0, "Host level filter")
+	list.Flags().IntVar(&minimumHostRating, "min-host-rating", -1, "Minimum host rating from -1 through 5 (-1 disables the filter)")
 	list.Flags().StringArrayVar(&excluded, "exclude-pokemon", nil, "Pokemon/form ID to exclude (repeatable)")
+	list.Flags().BoolVar(&includeMetadata, "include-metadata", true, "Include English Pokemon names from homepage metadata")
 	list.RunE = func(command *cobra.Command, _ []string) error {
-		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || page < 1 || !validHostLevel(hostLevel) {
+		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || page < 1 || !validHostLevel(hostLevel) || minimumHostRating < -1 || minimumHostRating > 5 {
 			return newUsageError()
 		}
 		token, err := readCommandToken(command, *tokenFile)
 		if err != nil {
 			return err
 		}
-		raids, err := operations.ListRaids(command.Context(), token, upstream.LobbyQuery{Filters: excluded, Page: page, SearchRank: rank, HostLevel: hostLevel}, callOptions(requestTimeout))
+		raids, err := operations.ListRaids(command.Context(), token, upstream.LobbyQuery{Filters: excluded, Page: page, SearchRank: rank, HostLevel: hostLevel, HostEvaluate: lobbyHostEvaluate(minimumHostRating)}, callOptions(requestTimeout))
 		if err != nil {
 			return sanitizedPublisherError(err)
 		}
 		if raids == nil {
 			raids = []domain.Raid{}
 		}
-		views, err := raidViews(command.Context(), metadataFetcher, raids)
-		if err != nil {
-			return err
+		views := make([]raidView, 0, len(raids))
+		if includeMetadata {
+			views, err = raidViews(command.Context(), metadataFetcher, raids)
+			if err != nil {
+				return err
+			}
+		} else {
+			for _, raid := range raids {
+				views = append(views, raidView{Raid: raid})
+			}
 		}
 		if *jsonOutput {
 			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("lobbies list", "listed", views, nil))
 		}
 		for _, raid := range views {
-			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s rank=%s name=%s pokemon=%s players=%d/%d\n", raid.ID, raid.Rank, raid.PokemonName, raid.PokemonID, raid.Count, raid.MaxUsers); err != nil {
+			if includeMetadata {
+				if _, err := fmt.Fprintf(command.OutOrStdout(), "%s rank=%s name=%s pokemon=%s players=%d/%d\n", raid.ID, raid.Rank, raid.PokemonName, raid.PokemonID, raid.Count, raid.MaxUsers); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s rank=%s pokemon=%s players=%d/%d\n", raid.ID, raid.Rank, raid.PokemonID, raid.Count, raid.MaxUsers); err != nil {
 				return err
 			}
 		}
@@ -423,11 +439,19 @@ func validHostLevel(level int) bool {
 	return level == 0 || level == 40 || level == 50 || level == 60 || level == 70
 }
 
+func lobbyHostEvaluate(minimum int) []int {
+	values := make([]int, 0, minimum+1)
+	for rating := -1; rating < minimum; rating++ {
+		values = append(values, rating)
+	}
+	return values
+}
+
 func helpRun(command *cobra.Command, _ []string) error { return command.Help() }
 
 type raidView struct {
 	domain.Raid
-	PokemonName string `json:"pokemonName"`
+	PokemonName string `json:"pokemonName,omitempty"`
 }
 
 func raidViews(ctx context.Context, fetcher MetadataFetcher, raids []domain.Raid) ([]raidView, error) {
