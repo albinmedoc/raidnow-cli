@@ -27,11 +27,15 @@ type LobbyQuery struct {
 	HostEvaluate []int
 }
 
-// QueueSelection identifies exact Auto Join ranks and species/forms.
+// QueueSelection identifies Auto Join ranks, species/forms, and matching filters.
 type QueueSelection struct {
-	Ranks         []string
-	PokemonIDs    []string
-	GuestEvalStar string
+	Ranks             []string
+	PokemonIDs        []string
+	GuestEvalStar     string
+	MinimumHostRating int
+	HostCountry       int
+	WeatherBoost      int
+	HostLevel         int
 }
 
 // ListCurrentRaidBosses returns the current read-only Auto Join catalog.

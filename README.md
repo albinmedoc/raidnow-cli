@@ -25,13 +25,15 @@ go build -o raidnow ./cmd/raidnow
   --trainer-code-file ./trainer-code
 ./raidnow --token-file ./raidnow.token queue join \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se \
-  --trainer-code-file ./trainer-code --rank 5 --pokemon 150
+  --trainer-code-file ./trainer-code --rank 5 --pokemon 150 \
+  --min-host-rating 3 --host-country 0 --weather-boost 0 --host-level 0
 ./raidnow --token-file ./raidnow.token queue status --rank 5 --pokemon 150
 ./raidnow --token-file ./raidnow.token queue wait --rank 5 --pokemon 150
 ./raidnow --token-file ./raidnow.token queue cancel --pokemon 150
 ./raidnow --token-file ./raidnow.token search \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se \
-  --trainer-code-file ./trainer-code --rank 5 --pokemon 150
+  --trainer-code-file ./trainer-code --rank 5 --pokemon 150 \
+  --min-host-rating 3 --host-country 0 --weather-boost 0 --host-level 0
 ./raidnow --token-file ./raidnow.token bosses list
 ./raidnow --token-file ./raidnow.token bosses list --rank 5 --json
 ./raidnow --token-file ./raidnow.token lobbies list --page 1 --rank 0
@@ -60,6 +62,8 @@ When reading `--token-file`, the CLI requires a regular file, reads a bounded va
 The form transport is stateless: callers provide the token on each request. Mutating commands are never retried automatically because a broken connection after dispatch can leave the write outcome unknown. Queue cancellation and raid leaving perform one read-back verification after an acknowledged write. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
 
 `queue wait` only polls an existing Auto Join queue and never cancels it on timeout or interruption. `search` creates the queue once, waits in the foreground, and makes one best-effort cancel-and-check cleanup attempt after timeout or interruption. A successful match is the Auto Join result; inspect it with `raid status` when needed.
+
+`queue join` and `search` accept the same Auto Join filters: `--min-host-rating` (`-1` through `5`, default `3`), `--host-country` (`0` or `1`, default `0`), `--weather-boost` (`0`, `1`, or `2`, default `0`), and `--host-level` (`0`, `40`, `50`, `60`, or `70`, default `0`). A minimum host rating of `-1` disables the host-rating filter.
 
 ## Pokémon names and IDs
 

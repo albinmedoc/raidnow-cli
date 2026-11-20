@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"net/url"
+	"strconv"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
 	"github.com/albinmedoc/raidnow-cli/internal/session"
@@ -34,14 +35,19 @@ func (client *Client) PublishTrainer(ctx context.Context, token string, trainer 
 func (client *Client) CreateMatching(ctx context.Context, token string, trainer domain.Trainer, selection QueueSelection, options CallOptions) error {
 	ranks, pokemon, selectionOK := normalizeSelectionPairs(selection.Ranks, selection.PokemonIDs)
 	if ctx == nil || !session.AnonymousTokenIsValid(token) || !selectionOK || len(ranks) == 0 || !safeOptionalValue(selection.GuestEvalStar) ||
+		selection.MinimumHostRating < -1 || selection.MinimumHostRating > 5 || (selection.HostCountry != 0 && selection.HostCountry != 1) ||
+		selection.WeatherBoost < 0 || selection.WeatherBoost > 2 || !allowedHostLevel(selection.HostLevel) ||
 		trainer.NameFormValue() == "" || trainer.CodeFormValue() == "" || trainer.LevelFormValue() == "0" || trainer.CountryFormValue() == "" {
 		return invalidArguments("Ogiltigt köurval.")
 	}
 	form := url.Values{
 		"rank[]": ranks, "pokemon[]": pokemon, "code": {trainer.CodeFormValue()}, "tid": {trainer.NameFormValue()},
 		"level": {trainer.LevelFormValue()}, "priority": {"0"}, "lang": {"1"}, "gscore": {selection.GuestEvalStar},
-		"country_code": {trainer.CountryFormValue()}, "plugs": {"[]"}, "host_country": {"0"}, "weather_boost": {"0"},
-		"guest6": {"0"}, "regional_raid": {"0"}, "token": {token}, "hosteval[]": {"-1", "0", "1", "2"}, "hosttl": {"0"},
+		"country_code": {trainer.CountryFormValue()}, "plugs": {"[]"}, "host_country": {strconv.Itoa(selection.HostCountry)}, "weather_boost": {strconv.Itoa(selection.WeatherBoost)},
+		"guest6": {"0"}, "regional_raid": {"0"}, "token": {token}, "hosttl": {strconv.Itoa(selection.HostLevel)},
+	}
+	for rating := -1; rating < selection.MinimumHostRating; rating++ {
+		form["hosteval[]"] = append(form["hosteval[]"], strconv.Itoa(rating))
 	}
 	raw, err := client.PostForm(ctx, LineMatchingCreate, form, options)
 	if err != nil {

@@ -150,7 +150,7 @@ func runPrimitiveCommandWithMetadata(t *testing.T, operations *stubRaidOperation
 
 func TestQueueJoinCallsCreateOnceAndRendersHumanSuccess(t *testing.T) {
 	operations := &stubRaidOperations{}
-	stdout, err := runPrimitiveCommand(t, operations, "opaque-token\n", "queue", "join", "--trainer-name", "Ash123", "--trainer-level", "50", "--trainer-country", "SE", "--trainer-code-file", protectedTrainerCodeFile(t, "123456789012"), "--rank", "5", "--pokemon", "150", "--rank", "mega", "--pokemon", "6_x", "--guest-score", "4")
+	stdout, err := runPrimitiveCommand(t, operations, "opaque-token\n", "queue", "join", "--trainer-name", "Ash123", "--trainer-level", "50", "--trainer-country", "SE", "--trainer-code-file", protectedTrainerCodeFile(t, "123456789012"), "--rank", "5", "--pokemon", "150", "--rank", "mega", "--pokemon", "6_x", "--guest-score", "4", "--min-host-rating", "-1", "--host-country", "1", "--weather-boost", "2", "--host-level", "70")
 	if err != nil || stdout != "Kön skapades.\n" {
 		t.Fatalf("stdout=%q err=%v", stdout, err)
 	}
@@ -158,8 +158,33 @@ func TestQueueJoinCallsCreateOnceAndRendersHumanSuccess(t *testing.T) {
 		t.Fatalf("calls=%#v", operations.calls)
 	}
 	call := operations.calls[0]
-	if call.name != "create" || call.token != "opaque-token" || call.trainer.CodeFormValue() != "123456789012" || call.options.Timeout != 3*time.Second || len(call.selection.Ranks) != 2 || call.selection.PokemonIDs[1] != "6_x" || call.selection.GuestEvalStar != "4" {
+	if call.name != "create" || call.token != "opaque-token" || call.trainer.CodeFormValue() != "123456789012" || call.options.Timeout != 3*time.Second || len(call.selection.Ranks) != 2 || call.selection.PokemonIDs[1] != "6_x" || call.selection.GuestEvalStar != "4" || call.selection.MinimumHostRating != -1 || call.selection.HostCountry != 1 || call.selection.WeatherBoost != 2 || call.selection.HostLevel != 70 {
 		t.Fatalf("call=%+v", call)
+	}
+}
+
+func TestQueueJoinUsesMatchingFilterDefaults(t *testing.T) {
+	operations := &stubRaidOperations{}
+	_, err := runPrimitiveCommand(t, operations, "opaque-token\n", "queue", "join", "--trainer-name", "Ash123", "--trainer-level", "50", "--trainer-country", "SE", "--trainer-code-file", protectedTrainerCodeFile(t, "123456789012"), "--rank", "5", "--pokemon", "150")
+	if err != nil || len(operations.calls) != 1 {
+		t.Fatalf("err=%v calls=%#v", err, operations.calls)
+	}
+	selection := operations.calls[0].selection
+	if selection.MinimumHostRating != 3 || selection.HostCountry != 0 || selection.WeatherBoost != 0 || selection.HostLevel != 0 {
+		t.Fatalf("selection=%+v", selection)
+	}
+}
+
+func TestQueueJoinRejectsInvalidMatchingFiltersBeforeReadingSecrets(t *testing.T) {
+	operations := &stubRaidOperations{}
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, TokenFile: "-", RequestTimeout: time.Second})
+	command.SetIn(panicReader{})
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"queue", "join", "--trainer-name", "Ash123", "--trainer-level", "50", "--trainer-country", "SE", "--trainer-code-file", protectedTrainerCodeFile(t, "123456789012"), "--rank", "5", "--pokemon", "150", "--host-country", "2"})
+	err := command.Execute()
+	if output.ExitCodeFor(err) != output.ExitInvalidArguments || len(operations.calls) != 0 {
+		t.Fatalf("exit=%d calls=%#v err=%v", output.ExitCodeFor(err), operations.calls, err)
 	}
 }
 

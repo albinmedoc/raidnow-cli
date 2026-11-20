@@ -17,7 +17,7 @@ import (
 func TestPrimitiveWritesPostExactForms(t *testing.T) {
 	trainer, _ := domain.NewTrainer("Ash123", "123456789012", 50, "se")
 	identity, _ := domain.NewTrainerIdentity("Misty7", 44, "JP")
-	selection := QueueSelection{Ranks: []string{"5", "mega"}, PokemonIDs: []string{"150", "6_mega_x"}, GuestEvalStar: "4"}
+	selection := QueueSelection{Ranks: []string{"5", "mega"}, PokemonIDs: []string{"150", "6_mega_x"}, GuestEvalStar: "4", MinimumHostRating: 3}
 	tests := []struct {
 		name string
 		want url.Values
@@ -72,6 +72,69 @@ func TestPrimitiveWritesPostExactForms(t *testing.T) {
 	}
 }
 
+func TestCreateMatchingPostsExplicitFilterEdgesInOrder(t *testing.T) {
+	trainer, _ := domain.NewTrainer("Ash123", "123456789012", 50, "se")
+	tests := []struct {
+		name            string
+		selection       QueueSelection
+		wantHostCountry string
+		wantWeather     string
+		wantHostLevel   string
+		wantHostEval    []string
+	}{
+		{
+			name:            "omit host rating",
+			selection:       QueueSelection{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, MinimumHostRating: -1, HostCountry: 1, WeatherBoost: 2, HostLevel: 70},
+			wantHostCountry: "1",
+			wantWeather:     "2",
+			wantHostLevel:   "70",
+		},
+		{
+			name:            "zero host rating",
+			selection:       QueueSelection{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, MinimumHostRating: 0},
+			wantHostCountry: "0",
+			wantWeather:     "0",
+			wantHostLevel:   "0",
+			wantHostEval:    []string{"-1"},
+		},
+		{
+			name:            "maximum host rating",
+			selection:       QueueSelection{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, MinimumHostRating: 5},
+			wantHostCountry: "0",
+			wantWeather:     "0",
+			wantHostLevel:   "0",
+			wantHostEval:    []string{"-1", "0", "1", "2", "3", "4"},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			var got url.Values
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				_ = request.ParseForm()
+				got = request.PostForm
+				_, _ = response.Write([]byte(`{"status":"success"}`))
+			}))
+			defer server.Close()
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+			if err := client.CreateMatching(context.Background(), "opaque-token", trainer, testCase.selection, CallOptions{}); err != nil {
+				t.Fatalf("create matching: %v", err)
+			}
+			want := url.Values{
+				"type": {"line_matching_create"}, "rank[]": {"5"}, "pokemon[]": {"150"}, "code": {"123456789012"},
+				"tid": {"Ash123"}, "level": {"50"}, "priority": {"0"}, "lang": {"1"}, "gscore": {""},
+				"country_code": {"se"}, "plugs": {"[]"}, "host_country": {testCase.wantHostCountry}, "weather_boost": {testCase.wantWeather},
+				"guest6": {"0"}, "regional_raid": {"0"}, "token": {"opaque-token"}, "hosttl": {testCase.wantHostLevel},
+			}
+			if testCase.wantHostEval != nil {
+				want["hosteval[]"] = testCase.wantHostEval
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("form=%#v want=%#v", got, want)
+			}
+		})
+	}
+}
+
 func TestPrimitiveWritesRequireValidAcknowledgement(t *testing.T) {
 	trainer, _ := domain.NewTrainer("Ash123", "123456789012", 50, "se")
 	for _, body := range []string{"", `{}`, `{"status":"error"}`, `[]`, `not-json`} {
@@ -99,6 +162,17 @@ func TestPrimitiveWritesRejectInvalidInputsBeforeNetwork(t *testing.T) {
 		client.JoinRaid(context.Background(), "token", "raid", domain.TrainerIdentity{}, CallOptions{}),
 		client.LeaveRaid(context.Background(), "token", "\n", CallOptions{}),
 		client.LeaveRaid(context.Background(), "token", "raid", CallOptions{Timeout: -time.Second}),
+	}
+	for _, selection := range []QueueSelection{
+		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, MinimumHostRating: -2},
+		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, MinimumHostRating: 6},
+		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, HostCountry: -1},
+		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, HostCountry: 2},
+		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, WeatherBoost: -1},
+		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, WeatherBoost: 3},
+		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, HostLevel: 41},
+	} {
+		checks = append(checks, client.CreateMatching(context.Background(), "token", trainer, selection, CallOptions{}))
 	}
 	for _, err := range checks {
 		assertExitCode(t, err, output.ExitInvalidArguments)

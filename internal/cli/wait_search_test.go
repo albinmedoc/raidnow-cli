@@ -100,7 +100,7 @@ func TestSearchCreatesOnceThenReturnsMatchedQueue(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			operations := &stubRaidOperations{poll: domain.QueuePoll{State: domain.QueueMatched, RaidID: "raid-9"}}
-			args := searchArguments(t)
+			args := append(searchArguments(t), "--min-host-rating", "0", "--host-country", "1", "--weather-boost", "2", "--host-level", "60")
 			if testCase.json {
 				args = append([]string{"--json"}, args...)
 			}
@@ -110,6 +110,10 @@ func TestSearchCreatesOnceThenReturnsMatchedQueue(t *testing.T) {
 			}
 			if names := strings.Join(primitiveCallNames(operations.calls), ","); names != "create,poll" {
 				t.Fatalf("calls=%s", names)
+			}
+			selection := operations.calls[0].selection
+			if selection.MinimumHostRating != 0 || selection.HostCountry != 1 || selection.WeatherBoost != 2 || selection.HostLevel != 60 {
+				t.Fatalf("selection=%+v", selection)
 			}
 		})
 	}
@@ -206,11 +210,43 @@ func TestWaitAndSearchValidateBeforeNetwork(t *testing.T) {
 		{"queue", "wait", "--rank", "5", "--pokemon", "150", "--max-wait", "0"},
 		append(searchArguments(t), "--poll-interval", "249ms"),
 		append(searchArguments(t), "--max-wait", "0"),
+		append(searchArguments(t), "--min-host-rating", "6"),
+		append(searchArguments(t), "--host-country", "2"),
+		append(searchArguments(t), "--weather-boost", "3"),
+		append(searchArguments(t), "--host-level", "41"),
 	} {
 		operations := &stubRaidOperations{}
 		_, err := runPrimitiveCommand(t, operations, "token\n", args...)
 		if output.ExitCodeFor(err) == output.ExitSuccess || len(operations.calls) != 0 {
 			t.Fatalf("args=%v exit=%d calls=%v", args, output.ExitCodeFor(err), operations.calls)
+		}
+	}
+}
+
+func TestSearchRejectsInvalidMatchingFiltersBeforeReadingSecrets(t *testing.T) {
+	operations := &stubRaidOperations{}
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, TokenFile: "-", RequestTimeout: time.Second})
+	command.SetIn(panicReader{})
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs(append(searchArguments(t), "--min-host-rating", "-2"))
+	err := command.Execute()
+	if output.ExitCodeFor(err) != output.ExitInvalidArguments || len(operations.calls) != 0 {
+		t.Fatalf("exit=%d calls=%#v err=%v", output.ExitCodeFor(err), operations.calls, err)
+	}
+}
+
+func TestQueueStatusAndWaitDoNotExposeMatchingFilterFlags(t *testing.T) {
+	root := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: &stubRaidOperations{}, TokenFile: "-", RequestTimeout: time.Second})
+	for _, path := range [][]string{{"queue", "status"}, {"queue", "wait"}} {
+		command, _, err := root.Find(path)
+		if err != nil {
+			t.Fatalf("find %v: %v", path, err)
+		}
+		for _, name := range []string{"min-host-rating", "host-country", "weather-boost", "host-level"} {
+			if command.Flags().Lookup(name) != nil {
+				t.Fatalf("%v advertises --%s", path, name)
+			}
 		}
 	}
 }

@@ -46,11 +46,16 @@ func newQueueJoinCommand(operations RaidOperations, tokenFile *string, requestTi
 	command := &cobra.Command{Use: "join", Short: "Create an Auto Join queue", Args: usageNoArgs}
 	trainerInput := bindTrainerInputFlags(command)
 	selection := bindQueueSelectionFlags(command)
+	filters := bindMatchingFilterFlags(command)
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || (*tokenFile == "-" && trainerInput.codeFile == "-") {
 			return newUsageError()
 		}
 		queueSelection, err := selection.value()
+		if err != nil {
+			return err
+		}
+		queueSelection, err = filters.apply(queueSelection)
 		if err != nil {
 			return err
 		}
@@ -326,6 +331,34 @@ func (selection *queueSelectionFlags) value() (upstream.QueueSelection, error) {
 		return upstream.QueueSelection{}, newUsageError()
 	}
 	return upstream.QueueSelection{Ranks: selection.ranks, PokemonIDs: selection.pokemon, GuestEvalStar: selection.guestScore}, nil
+}
+
+type matchingFilterFlags struct {
+	minimumHostRating int
+	hostCountry       int
+	weatherBoost      int
+	hostLevel         int
+}
+
+func bindMatchingFilterFlags(command *cobra.Command) *matchingFilterFlags {
+	filters := &matchingFilterFlags{}
+	command.Flags().IntVar(&filters.minimumHostRating, "min-host-rating", 3, "Minimum host rating from -1 through 5 (-1 disables the filter)")
+	command.Flags().IntVar(&filters.hostCountry, "host-country", 0, "Host country filter (0 or 1)")
+	command.Flags().IntVar(&filters.weatherBoost, "weather-boost", 0, "Weather boost filter (0, 1, or 2)")
+	command.Flags().IntVar(&filters.hostLevel, "host-level", 0, "Host level filter (0, 40, 50, 60, or 70)")
+	return filters
+}
+
+func (filters *matchingFilterFlags) apply(selection upstream.QueueSelection) (upstream.QueueSelection, error) {
+	if filters == nil || filters.minimumHostRating < -1 || filters.minimumHostRating > 5 ||
+		(filters.hostCountry != 0 && filters.hostCountry != 1) || filters.weatherBoost < 0 || filters.weatherBoost > 2 || !validHostLevel(filters.hostLevel) {
+		return upstream.QueueSelection{}, newUsageError()
+	}
+	selection.MinimumHostRating = filters.minimumHostRating
+	selection.HostCountry = filters.hostCountry
+	selection.WeatherBoost = filters.weatherBoost
+	selection.HostLevel = filters.hostLevel
+	return selection, nil
 }
 
 func readCommandToken(command *cobra.Command, path string) (string, error) {

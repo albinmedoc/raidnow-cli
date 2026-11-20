@@ -67,12 +67,17 @@ func newSearchCommand(operations RaidOperations, tokenFile *string, requestTimeo
 	command := &cobra.Command{Use: "search", Short: "Create an Auto Join queue and wait for a match", Args: usageNoArgs}
 	trainerInput := bindTrainerInputFlags(command)
 	selection := bindQueueSelectionFlags(command)
+	filters := bindMatchingFilterFlags(command)
 	wait := bindWaitFlags(command)
 	command.RunE = func(command *cobra.Command, _ []string) error {
 		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || !wait.valid() || (*tokenFile == "-" && trainerInput.codeFile == "-") {
 			return newUsageError()
 		}
 		queueSelection, err := selection.value()
+		if err != nil {
+			return err
+		}
+		queueSelection, err = filters.apply(queueSelection)
 		if err != nil {
 			return err
 		}
