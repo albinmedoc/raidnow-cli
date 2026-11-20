@@ -99,6 +99,18 @@ func (client *Client) LeaveRaid(ctx context.Context, token, raidID string, optio
 	return acknowledgeWrite(GuestRaidDelPost, raw, token)
 }
 
+// ReadyRaid marks the anonymous trainer ready in one raid without retrying writes.
+func (client *Client) ReadyRaid(ctx context.Context, token, raidID string, options CallOptions) error {
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || !safeValue(raidID, true) {
+		return invalidArguments("Ogiltigt raid-id.")
+	}
+	raw, err := client.PostForm(ctx, GuestReadyPost, url.Values{"edit": {raidID}, "ready": {"1"}, "lang": {"1"}, "token": {token}}, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeWrite(GuestReadyPost, raw, token)
+}
+
 func acknowledgeWrite(operation Operation, raw []byte, secrets ...string) error {
 	if len(raw) == 0 {
 		descriptor, err := operation.Descriptor()

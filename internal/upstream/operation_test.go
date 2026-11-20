@@ -32,6 +32,7 @@ func TestKnownOperationsBindImmutableMetadata(t *testing.T) {
 		{LineMatchingCancel, "line_matching_cancel", WriteOperation, 15 * time.Second, false},
 		{ChildPostFast, "child_post_fast", WriteOperation, 15 * time.Second, false},
 		{GuestRaidDelPost, "guest_raid_del_post", WriteOperation, 15 * time.Second, false},
+		{GuestReadyPost, "guest_ready_post", WriteOperation, 15 * time.Second, false},
 	}
 
 	for _, testCase := range testCases {

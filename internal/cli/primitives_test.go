@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,8 +116,12 @@ func (stub *stubRaidOperations) LeaveRaid(_ context.Context, token, raidID strin
 	stub.calls = append(stub.calls, primitiveCall{name: "leave", token: token, raidID: raidID, options: options})
 	return stub.err
 }
+func (stub *stubRaidOperations) ReadyRaid(_ context.Context, token, raidID string, options upstream.CallOptions) error {
+	stub.calls = append(stub.calls, primitiveCall{name: "ready", token: token, raidID: raidID, options: options})
+	return stub.err
+}
 
-func runPrimitiveCommand(t *testing.T, operations *stubRaidOperations, input string, args ...string) (string, error) {
+func runPrimitiveCommand(t *testing.T, operations RaidOperations, input string, args ...string) (string, error) {
 	return runPrimitiveCommandWithMetadata(t, operations, &stubMetadataFetcher{catalog: testCatalog(t)}, input, args...)
 }
 
@@ -142,7 +149,7 @@ func testCatalog(t *testing.T) metadata.Catalog {
 	return catalog
 }
 
-func runPrimitiveCommandWithMetadata(t *testing.T, operations *stubRaidOperations, fetcher *stubMetadataFetcher, input string, args ...string) (string, error) {
+func runPrimitiveCommandWithMetadata(t *testing.T, operations RaidOperations, fetcher *stubMetadataFetcher, input string, args ...string) (string, error) {
 	t.Helper()
 	var stdout bytes.Buffer
 	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, Metadata: fetcher, TokenFile: "-", RequestTimeout: 3 * time.Second})
@@ -468,6 +475,72 @@ func TestRaidJoinRendersExactHumanSuccess(t *testing.T) {
 	}
 }
 
+func TestRaidReadyCallsOnceAndRendersStableJSON(t *testing.T) {
+	operations := &stubRaidOperations{}
+	tokenFile := protectedTrainerCodeFile(t, "opaque-token\n")
+	stdout, err := runPrimitiveCommand(t, operations, "", "--json", "--token-file", tokenFile, "raid", "ready", "--raid-id", "raid-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"raid ready\",\"status\":\"ready\",\"data\":{\"ready\":true,\"raidId\":\"raid-9\"},\"warnings\":[]}\n"
+	if stdout != want || len(operations.calls) != 1 {
+		t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
+	}
+	call := operations.calls[0]
+	if call.name != "ready" || call.token != "opaque-token" || call.raidID != "raid-9" || call.options.Timeout != 3*time.Second {
+		t.Fatalf("call=%+v", call)
+	}
+}
+
+func TestRaidReadyRejectsMissingRaidIDBeforeReadingToken(t *testing.T) {
+	operations := &stubRaidOperations{}
+	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, TokenFile: "-", RequestTimeout: time.Second})
+	command.SetIn(panicReader{})
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	command.SetArgs([]string{"raid", "ready"})
+	err := command.Execute()
+	if output.ExitCodeFor(err) != output.ExitInvalidArguments || len(operations.calls) != 0 {
+		t.Fatalf("exit=%d calls=%#v err=%v", output.ExitCodeFor(err), operations.calls, err)
+	}
+}
+
+func TestRaidReadyRejectsInvalidRaidIDWithoutNetwork(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+	defer server.Close()
+	client, err := upstream.NewClient(upstream.Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := runPrimitiveCommand(t, client, "token\n", "raid", "ready", "--raid-id", "\n")
+	if output.ExitCodeFor(err) != output.ExitInvalidArguments || stdout != "" || requests.Load() != 0 {
+		t.Fatalf("exit=%d stdout=%q requests=%d err=%v", output.ExitCodeFor(err), stdout, requests.Load(), err)
+	}
+}
+
+func TestRaidReadyPreservesSanitizedRejectionText(t *testing.T) {
+	operations := &stubRaidOperations{err: output.NewError(output.CodeUpstreamRejection, "Upstream avvisade begäran: Lobby is full.")}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "raid", "ready", "--raid-id", "raid-9")
+	if output.ExitCodeFor(err) != output.ExitUpstreamRejection || err.Error() != "Upstream avvisade begäran: Lobby is full." || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q err=%v", output.ExitCodeFor(err), stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "ready" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+}
+
+func TestRaidReadyPreservesUnknownWriteOutcomeWithoutRetry(t *testing.T) {
+	operations := &stubRaidOperations{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret uncertain write")}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "raid", "ready", "--raid-id", "raid-9")
+	if output.ExitCodeFor(err) != output.ExitWriteOutcomeUnknown || strings.Contains(err.Error(), "secret") || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q err=%v", output.ExitCodeFor(err), stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "ready" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+}
+
 func TestRaidPlayersCallsListOnceAndRendersUnchangedJSON(t *testing.T) {
 	rating := 5
 	players := domain.RaidPlayers{Players: []domain.RaidPlayer{{ID: "hidden-player-id", TrainerName: "Ash123", Level: 50, Country: "se", Rating: &rating, Ready: true, IsMe: true}}, Count: 1, ReadyCount: 1, RaidDeleted: false}
@@ -674,6 +747,7 @@ func TestPrimitiveCommandsValidateBeforeCallingOperations(t *testing.T) {
 		{"raid", "get"},
 		{"raid", "players"},
 		{"raid", "status"},
+		{"raid", "ready"},
 		{"raid", "leave"},
 	} {
 		operations := &stubRaidOperations{}

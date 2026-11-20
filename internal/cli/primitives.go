@@ -26,6 +26,7 @@ type RaidOperations interface {
 	FindRaid(context.Context, string, string, upstream.CallOptions) (*domain.Raid, error)
 	ListRaidPlayers(context.Context, string, string, upstream.CallOptions) (domain.RaidPlayers, error)
 	LeaveRaid(context.Context, string, string, upstream.CallOptions) error
+	ReadyRaid(context.Context, string, string, upstream.CallOptions) error
 }
 
 type MetadataFetcher interface {
@@ -256,6 +257,7 @@ func newRaidCommand(operations RaidOperations, metadataFetcher MetadataFetcher, 
 	command.AddCommand(newRaidGetCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newRaidPlayersCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newRaidStatusCommand(operations, metadataFetcher, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newRaidReadyCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	command.AddCommand(newRaidLeaveCommand(operations, tokenFile, requestTimeout, jsonOutput))
 	return command
 }
@@ -398,6 +400,33 @@ func newRaidStatusCommand(operations RaidOperations, metadataFetcher MetadataFet
 			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("raid status", "found", data, warnings))
 		}
 		_, err = fmt.Fprintf(command.OutOrStdout(), "%s name=%s pokemon=%s players=%d ready=%d\n", raid.ID, view.PokemonName, raid.PokemonID, players.Count, players.ReadyCount)
+		return err
+	}
+	return command
+}
+
+func newRaidReadyCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	var raidID string
+	command := &cobra.Command{Use: "ready", Short: "Mark the anonymous trainer ready in one raid", Args: usageNoArgs}
+	command.Flags().StringVar(&raidID, "raid-id", "", "Exact raid ID")
+	command.RunE = func(command *cobra.Command, _ []string) error {
+		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || raidID == "" {
+			return newUsageError()
+		}
+		token, err := readCommandToken(command, *tokenFile)
+		if err != nil {
+			return err
+		}
+		if err := operations.ReadyRaid(command.Context(), token, raidID, callOptions(requestTimeout)); err != nil {
+			return sanitizedPublisherError(err)
+		}
+		if *jsonOutput {
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("raid ready", "ready", struct {
+				Ready  bool   `json:"ready"`
+				RaidID string `json:"raidId"`
+			}{Ready: true, RaidID: raidID}, nil))
+		}
+		_, err = fmt.Fprintln(command.OutOrStdout(), "Redo markerad.")
 		return err
 	}
 	return command

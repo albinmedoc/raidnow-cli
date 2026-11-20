@@ -52,6 +52,13 @@ func TestPrimitiveWritesPostExactForms(t *testing.T) {
 				return client.LeaveRaid(context.Background(), "opaque-token", "raid-9", CallOptions{})
 			},
 		},
+		{
+			name: "ready raid",
+			want: url.Values{"type": {"guest_ready_post"}, "edit": {"raid-9"}, "ready": {"1"}, "lang": {"1"}, "token": {"opaque-token"}},
+			call: func(client *Client) error {
+				return client.ReadyRaid(context.Background(), "opaque-token", "raid-9", CallOptions{})
+			},
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -156,6 +163,19 @@ func TestPrimitiveWriteRejectionPreservesUsefulTextWithoutCredentials(t *testing
 	}
 }
 
+func TestReadyRaidRejectionPreservesUsefulTextWithoutToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"status":"error","text":"Raid already started for opaque-token."}`))
+	}))
+	defer server.Close()
+	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+	err := client.ReadyRaid(context.Background(), "opaque-token", "raid-9", CallOptions{})
+	assertExitCode(t, err, output.ExitUpstreamRejection)
+	if message := err.Error(); !strings.Contains(message, "Raid already started") || strings.Contains(message, "opaque-token") {
+		t.Fatalf("error=%q", message)
+	}
+}
+
 func TestUpstreamRejectionRedactsCredentialsBeforeTruncation(t *testing.T) {
 	prefix := strings.Repeat("a", 250)
 	for _, testCase := range []struct {
@@ -203,6 +223,8 @@ func TestPrimitiveWritesRejectInvalidInputsBeforeNetwork(t *testing.T) {
 		client.JoinRaid(context.Background(), "token", "raid", domain.TrainerIdentity{}, CallOptions{}),
 		client.LeaveRaid(context.Background(), "token", "\n", CallOptions{}),
 		client.LeaveRaid(context.Background(), "token", "raid", CallOptions{Timeout: -time.Second}),
+		client.ReadyRaid(context.Background(), "token", "\n", CallOptions{}),
+		client.ReadyRaid(context.Background(), "token", "raid", CallOptions{Timeout: -time.Second}),
 	}
 	for _, selection := range []QueueSelection{
 		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, MinimumHostRating: -2},
@@ -241,6 +263,9 @@ func TestPrimitiveWritesDoNotRetryAndClassifyDispatchedFailureAsUncertain(t *tes
 		}},
 		{name: "leave", call: func(client *Client) error {
 			return client.LeaveRaid(context.Background(), "token", "raid", CallOptions{Timeout: 10 * time.Millisecond})
+		}},
+		{name: "ready", call: func(client *Client) error {
+			return client.ReadyRaid(context.Background(), "token", "raid", CallOptions{Timeout: 10 * time.Millisecond})
 		}},
 	}
 	for _, testCase := range tests {

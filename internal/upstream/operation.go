@@ -20,6 +20,7 @@ const (
 	LineMatchingCancel
 	ChildPostFast
 	GuestRaidDelPost
+	GuestReadyPost
 )
 
 // OperationDescriptor is an immutable view of centrally registered operation
@@ -62,6 +63,8 @@ func (operation Operation) Descriptor() (OperationDescriptor, error) {
 		return OperationDescriptor{name: "child_post_fast", kind: WriteOperation, timeout: 15 * time.Second}, nil
 	case GuestRaidDelPost:
 		return OperationDescriptor{name: "guest_raid_del_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
+	case GuestReadyPost:
+		return OperationDescriptor{name: "guest_ready_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
 	default:
 		return OperationDescriptor{}, invalidArguments("Ogiltig upstream-operation.")
 	}
