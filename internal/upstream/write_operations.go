@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
+	"github.com/albinmedoc/raidnow-cli/internal/output"
 	"github.com/albinmedoc/raidnow-cli/internal/session"
 )
 
@@ -28,7 +30,7 @@ func (client *Client) PublishTrainer(ctx context.Context, token string, trainer 
 	if err != nil {
 		return err
 	}
-	return acknowledgeWrite(UserInfoPost, raw)
+	return acknowledgeWrite(UserInfoPost, raw, token, trainer.CodeFormValue())
 }
 
 // CreateMatching creates one Auto Join queue selection without retrying writes.
@@ -53,7 +55,7 @@ func (client *Client) CreateMatching(ctx context.Context, token string, trainer 
 	if err != nil {
 		return err
 	}
-	return acknowledgeWrite(LineMatchingCreate, raw)
+	return acknowledgeWrite(LineMatchingCreate, raw, token, trainer.CodeFormValue())
 }
 
 // CancelMatching cancels the current Auto Join queue without retrying writes.
@@ -65,7 +67,7 @@ func (client *Client) CancelMatching(ctx context.Context, token string, options 
 	if err != nil {
 		return err
 	}
-	return acknowledgeWrite(LineMatchingCancel, raw)
+	return acknowledgeWrite(LineMatchingCancel, raw, token)
 }
 
 // JoinRaid submits one trainer identity to a raid without retrying writes.
@@ -82,7 +84,7 @@ func (client *Client) JoinRaid(ctx context.Context, token, raidID string, identi
 	if err != nil {
 		return err
 	}
-	return acknowledgeWrite(ChildPostFast, raw)
+	return acknowledgeWrite(ChildPostFast, raw, token)
 }
 
 // LeaveRaid removes the anonymous trainer from one raid without retrying writes.
@@ -94,10 +96,10 @@ func (client *Client) LeaveRaid(ctx context.Context, token, raidID string, optio
 	if err != nil {
 		return err
 	}
-	return acknowledgeWrite(GuestRaidDelPost, raw)
+	return acknowledgeWrite(GuestRaidDelPost, raw, token)
 }
 
-func acknowledgeWrite(operation Operation, raw []byte) error {
+func acknowledgeWrite(operation Operation, raw []byte, secrets ...string) error {
 	if len(raw) == 0 {
 		descriptor, err := operation.Descriptor()
 		if err != nil {
@@ -120,8 +122,12 @@ func acknowledgeWrite(operation Operation, raw []byte) error {
 	if !ok {
 		return upstreamRejection()
 	}
-	if err := classifyStatus(map[string]any{"status": text, "text": object["text"]}); err != nil {
-		return err
+	if !strings.EqualFold(strings.TrimSpace(text), "success") {
+		if err := structuredRejection(object); output.PublicError(err).Code == output.CodeAuthenticationUnsupported {
+			return err
+		}
+		detail, _ := exactScalar(object["text"])
+		return upstreamRejectionDetail(detail, secrets...)
 	}
 	return nil
 }

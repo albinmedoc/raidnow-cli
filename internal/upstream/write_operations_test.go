@@ -70,7 +70,7 @@ func TestPublishTrainerClassifiesStructuredResponses(t *testing.T) {
 		want int
 	}{
 		{name: "session", body: `{"status":"error","text":"The session has expired. secret-marker"}`, want: output.ExitAuthenticationUnsupported},
-		{name: "rejected", body: `{"status":"error","text":"secret-marker"}`, want: output.ExitUpstreamRejection},
+		{name: "rejected", body: `{"status":"error","text":"Lobby is full."}`, want: output.ExitUpstreamRejection},
 		{name: "missing acknowledgement", body: `{"ok":true,"text":"secret-marker"}`, want: output.ExitUpstreamRejection},
 		{name: "wrong success type", body: `{"status":true}`, want: output.ExitUpstreamRejection},
 		{name: "array", body: `[]`, want: output.ExitUpstreamRejection},

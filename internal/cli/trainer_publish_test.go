@@ -171,6 +171,13 @@ func TestTrainerPublishPropagatesSanitizedPublisherErrors(t *testing.T) {
 	}
 }
 
+func TestTrainerPublishPreservesSafeUpstreamDiagnosticDetail(t *testing.T) {
+	err := sanitizedPublisherError(output.NewError(output.CodeUpstreamRejection, "Upstream avvisade begäran: Lobby is full."))
+	if !strings.Contains(err.Error(), "Lobby is full.") {
+		t.Fatalf("error omitted diagnostic detail: %q", err)
+	}
+}
+
 func TestTrainerPublishRedactsAllInvocationValuesFromPublisherErrors(t *testing.T) {
 	publisher := &stubTrainerPublisher{err: output.NewError(output.CodeUpstreamRejection, "opaque-token Ash123 123456789012 se")}
 	command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: publisher, TokenFile: "-"})

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -130,6 +131,46 @@ func TestCreateMatchingPostsExplicitFilterEdgesInOrder(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("form=%#v want=%#v", got, want)
+			}
+		})
+	}
+}
+
+func TestPrimitiveWriteRejectionPreservesUsefulTextWithoutCredentials(t *testing.T) {
+	trainer, _ := domain.NewTrainer("Ash123", "123456789012", 50, "se")
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"status":"error","text":"Lobby is full for opaque-token and 1234 5678 9012."}`))
+	}))
+	defer server.Close()
+	client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+	err := client.CreateMatching(context.Background(), "opaque-token", trainer, QueueSelection{Ranks: []string{"5"}, PokemonIDs: []string{"150"}}, CallOptions{})
+	assertExitCode(t, err, output.ExitUpstreamRejection)
+	message := err.Error()
+	if !strings.Contains(message, "Lobby is full") {
+		t.Fatalf("error omitted useful upstream detail: %q", message)
+	}
+	for _, secret := range []string{"opaque-token", "123456789012", "1234 5678 9012"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("error exposed credential %q: %q", secret, message)
+		}
+	}
+}
+
+func TestUpstreamRejectionRedactsCredentialsBeforeTruncation(t *testing.T) {
+	prefix := strings.Repeat("a", 250)
+	for _, testCase := range []struct {
+		name    string
+		secret  string
+		marker  string
+		secrets []string
+	}{
+		{name: "token", secret: "opaque-token", marker: "opaque", secrets: []string{"opaque-token"}},
+		{name: "trainer code", secret: "123456789012", marker: "123456", secrets: []string{"123456789012"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			message := upstreamRejectionDetail(prefix+testCase.secret, testCase.secrets...).Error()
+			if strings.Contains(message, testCase.marker) {
+				t.Fatalf("truncation leaked credential prefix %q: %q", testCase.marker, message)
 			}
 		})
 	}

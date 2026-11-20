@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/albinmedoc/raidnow-cli/internal/domain"
@@ -69,6 +70,9 @@ func sanitizedPublisherError(err error) error {
 		message = "Den anonyma upstream-sessionen har upphört och måste hämtas på nytt."
 	case output.CodeUpstreamRejection:
 		message = "Upstream avvisade begäran eller returnerade ett ogiltigt svar."
+		if strings.HasPrefix(public.Message, "Upstream avvisade begäran: ") {
+			message = public.Message
+		}
 	case output.CodeReadNetwork:
 		message = "Kunde inte läsa svar från upstream."
 	case output.CodeWriteOutcomeUnknown:
