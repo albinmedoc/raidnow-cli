@@ -49,4 +49,4 @@ Pin the CLI's Docker image version in deployments. `raidnow --json version` repo
 
 ## Secrets
 
-Tokens, trainer codes, and recognized secrets are redacted from normal output and errors. `raidnow --json token get` is the intentional exception: its success envelope returns the server-issued anonymous token, marks `data.containsSecret: true`, and includes a handling warning. Treat that entire stdout object as secret material. The CLI does not persist it.
+Tokens, trainer codes, and recognized secrets are redacted from normal output and errors. Intentional secret-bearing successes are limited to `raidnow --json token get` and matched raid details from `raidnow --json raid get` or `raidnow --json raid status`. These responses mark `data.containsSecret: true` (for status, inside `data.raid`) and include a handling warning. Treat the entire stdout object as secret material. The CLI does not persist it. Lobby lists, boss lists, player output, and all human raid output omit the host trainer code.

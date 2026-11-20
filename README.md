@@ -43,8 +43,11 @@ go build -o raidnow ./cmd/raidnow
   --min-host-rating 3 --include-metadata=false
 ./raidnow --token-file ./raidnow.token raid join --raid-id RAID_ID \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se
+./raidnow --token-file ./raidnow.token raid get --raid-id RAID_ID
+./raidnow --token-file ./raidnow.token raid players --raid-id RAID_ID
 ./raidnow --token-file ./raidnow.token raid status --raid-id RAID_ID
 ./raidnow --token-file ./raidnow.token raid leave --raid-id RAID_ID
+./raidnow --token-file ./raidnow.token raid leave --raid-id RAID_ID --verify=false
 ```
 
 Fetch a token with a single shell open into a new owner-only file:
@@ -63,7 +66,7 @@ Run this in a user-owned, non-world-writable directory. On supported Bash/POSIX 
 
 When reading `--token-file`, the CLI requires a regular file, reads a bounded value and never modifies the file. Symbolic links, directories and other non-regular paths are rejected. `trainer publish` consumes the token from `--token-file`; `token get` ignores `--token-file` because it fetches a new token. Human `token get` output is exactly the token plus a newline. JSON output deliberately contains the secret too, marks `status` as `secret`, sets `containsSecret: true`, and includes a handling warning. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
 
-The form transport is stateless: callers provide the token on each request. Mutating commands are never retried automatically because a broken connection after dispatch can leave the write outcome unknown. Queue cancellation and raid leaving perform one read-back verification after an acknowledged write. `queue cancel --verify=false` sends only the primitive cancellation request; Raid NOW Lite uses this form and owns later queue checks and reconciliation. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
+The form transport is stateless: callers provide the token on each request. Mutating commands are never retried automatically because a broken connection after dispatch can leave the write outcome unknown. Queue cancellation and raid leaving perform one read-back verification after an acknowledged write. `queue cancel --verify=false` and `raid leave --verify=false` send only the primitive write request; Raid NOW Lite uses these forms and owns later checks and reconciliation. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
 
 `queue wait` only polls an existing Auto Join queue and never cancels it on timeout or interruption. `search` creates the queue once, waits in the foreground, and makes one best-effort cancel-and-check cleanup attempt after timeout or interruption. A successful match is the Auto Join result; inspect it with `raid status` when needed.
 
@@ -78,6 +81,8 @@ The form transport is stateless: callers provide the token on each request. Muta
 ```
 
 By default, `lobbies list` and `raid status` include a `pokemonName` alongside the exact `pokemonId`. Names are the exact English values from Raid NOW's server-rendered `aryPokemon.en` catalog; form descriptors are not translated or rewritten. Raid NOW Lite scans lobbies with `--include-metadata=false` and joins exact Pokémon IDs to names and images from its separately cached `bosses list` results.
+
+JSON from `raid get` and `raid status` can intentionally include `hostTrainerCode` for Raid NOW Lite's local copy and QR interface. When present, `containsSecret` is `true` and the response includes a handling warning. Human output, lobby lists, and boss lists never print the code.
 
 The homepage metadata is fetched on demand only when a non-empty result needs names. It is kept in memory for that invocation and is never cached or written to disk. If metadata is unavailable, an ID is missing from the catalog, or its English name is blank, the command fails with `METADATA_UNAVAILABLE` instead of presenting the ID as a name. A blank boss image URL remains valid and is serialized as `"imageUrl":""`.
 

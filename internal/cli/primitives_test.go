@@ -416,7 +416,7 @@ func TestLobbiesListRejectsInvalidMinimumHostRatingBeforeTokenOrNetwork(t *testi
 }
 
 func TestLobbiesListCanSkipMetadata(t *testing.T) {
-	raid := domain.Raid{ID: "raid-A", Rank: "5", PokemonID: "150", Deleted: true, IsMe: true, MinimumGuestLevel: 40}
+	raid := domain.Raid{ID: "raid-A", Rank: "5", PokemonID: "150", HostTrainerCode: "123456789012", Deleted: true, IsMe: true, MinimumGuestLevel: 40}
 	operations := &stubRaidOperations{raids: []domain.Raid{raid}}
 	fetcher := &stubMetadataFetcher{panic: true}
 	stdout, err := runPrimitiveCommandWithMetadata(t, operations, fetcher, "token\n", "--json", "lobbies", "list", "--include-metadata=false")
@@ -428,7 +428,7 @@ func TestLobbiesListCanSkipMetadata(t *testing.T) {
 			t.Fatalf("stdout=%q missing %s", stdout, want)
 		}
 	}
-	if strings.Contains(stdout, "pokemonName") || fetcher.calls != 0 {
+	if strings.Contains(stdout, "pokemonName") || strings.Contains(stdout, "123456789012") || strings.Contains(stdout, "hostTrainerCode") || fetcher.calls != 0 {
 		t.Fatalf("stdout=%q metadata calls=%d", stdout, fetcher.calls)
 	}
 
@@ -468,6 +468,95 @@ func TestRaidJoinRendersExactHumanSuccess(t *testing.T) {
 	}
 }
 
+func TestRaidPlayersCallsListOnceAndRendersUnchangedJSON(t *testing.T) {
+	rating := 5
+	players := domain.RaidPlayers{Players: []domain.RaidPlayer{{ID: "hidden-player-id", TrainerName: "Ash123", Level: 50, Country: "se", Rating: &rating, Ready: true, IsMe: true}}, Count: 1, ReadyCount: 1, RaidDeleted: false}
+	operations := &stubRaidOperations{players: players}
+	fetcher := &stubMetadataFetcher{panic: true}
+	stdout, err := runPrimitiveCommandWithMetadata(t, operations, fetcher, "token\n", "--json", "raid", "players", "--raid-id", "raid-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"command":"raid players"`, `"status":"listed"`, `"data":{"players":[{"id":"hidden-player-id"`, `"count":1`, `"readyCount":1`, `"raidDeleted":false`} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout=%q missing %s", stdout, want)
+		}
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "players" || operations.calls[0].raidID != "raid-9" || operations.calls[0].options.Timeout != 3*time.Second || fetcher.calls != 0 {
+		t.Fatalf("calls=%#v metadata calls=%d", operations.calls, fetcher.calls)
+	}
+}
+
+func TestRaidPlayersHumanOmitsHiddenIDsAndRendersRows(t *testing.T) {
+	rating := 5
+	players := domain.RaidPlayers{Players: []domain.RaidPlayer{
+		{ID: "hidden-player-id", TrainerName: "Ash123", Level: 50, Country: "se", Rating: &rating, Ready: true, IsMe: true},
+		{ID: "another-hidden-id", TrainerName: "Misty7", Level: 44},
+	}, Count: 2, ReadyCount: 1}
+	stdout, err := runPrimitiveCommand(t, &stubRaidOperations{players: players}, "token\n", "raid", "players", "--raid-id", "raid-9")
+	want := "players=2 ready=1 deleted=false\nAsh123 level=50 country=se rating=5 ready=true me=true\nMisty7 level=44 country= rating=none ready=false me=false\n"
+	if err != nil || stdout != want || strings.Contains(stdout, "hidden") {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+}
+
+func TestRaidGetCallsFindOnceWithoutMetadataOrPlayers(t *testing.T) {
+	raid := &domain.Raid{ID: "raid-9", Rank: "5", PokemonID: "150", Count: 2}
+	operations := &stubRaidOperations{found: raid}
+	fetcher := &stubMetadataFetcher{panic: true}
+	stdout, err := runPrimitiveCommandWithMetadata(t, operations, fetcher, "token\n", "raid", "get", "--raid-id", "raid-9")
+	if err != nil || stdout != "raid-9 pokemon=150 players=2\n" {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "find" || operations.calls[0].options.Timeout != 3*time.Second || fetcher.calls != 0 {
+		t.Fatalf("calls=%#v metadata calls=%d", operations.calls, fetcher.calls)
+	}
+}
+
+func TestRaidGetReturnsNotFoundForValidAbsence(t *testing.T) {
+	operations := &stubRaidOperations{}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "raid", "get", "--raid-id", "missing")
+	if output.ExitCodeFor(err) != output.ExitNotFound || stdout != "" || len(operations.calls) != 1 || operations.calls[0].name != "find" {
+		t.Fatalf("exit=%d stdout=%q calls=%#v err=%v", output.ExitCodeFor(err), stdout, operations.calls, err)
+	}
+}
+
+func TestRaidGetJSONMarksAndWarnsAboutHostTrainerCode(t *testing.T) {
+	raid := &domain.Raid{ID: "raid-9", Rank: "5", PokemonID: "150", Count: 2, HostTrainerCode: "123456789012"}
+	operations := &stubRaidOperations{found: raid}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "raid", "get", "--raid-id", "raid-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"command":"raid get"`, `"status":"found"`, `"hostTrainerCode":"123456789012"`, `"containsSecret":true`, `"warnings":["Värdens tränarkod är hemlig; hantera den säkert."]`} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout=%q missing %s", stdout, want)
+		}
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "find" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+}
+
+func TestRaidGetJSONWithoutCodeHasNoSecretWarning(t *testing.T) {
+	raid := &domain.Raid{ID: "raid-9", PokemonID: "150"}
+	stdout, err := runPrimitiveCommand(t, &stubRaidOperations{found: raid}, "token\n", "--json", "raid", "get", "--raid-id", "raid-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, `"containsSecret":false`) || !strings.Contains(stdout, `"warnings":[]`) || strings.Contains(stdout, "hostTrainerCode") {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
+func TestRaidGetHumanNeverPrintsHostTrainerCode(t *testing.T) {
+	raid := &domain.Raid{ID: "raid-9", PokemonID: "150", Count: 2, HostTrainerCode: "123456789012"}
+	stdout, err := runPrimitiveCommand(t, &stubRaidOperations{found: raid}, "token\n", "raid", "get", "--raid-id", "raid-9")
+	if err != nil || stdout != "raid-9 pokemon=150 players=2\n" || strings.Contains(stdout, raid.HostTrainerCode) {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+}
+
 func TestRaidStatusFindsRaidThenListsPlayers(t *testing.T) {
 	raid := &domain.Raid{ID: "raid-9", PokemonID: "150", Count: 2}
 	operations := &stubRaidOperations{found: raid, players: domain.RaidPlayers{Count: 2, ReadyCount: 1, Players: []domain.RaidPlayer{{ID: "p1", TrainerName: "Ash123"}}}}
@@ -483,6 +572,73 @@ func TestRaidStatusFindsRaidThenListsPlayers(t *testing.T) {
 	_, err = runPrimitiveCommand(t, operations, "token\n", "raid", "status", "--raid-id", "missing")
 	if output.ExitCodeFor(err) != output.ExitNotFound || len(operations.calls) != 1 {
 		t.Fatalf("exit=%d calls=%#v", output.ExitCodeFor(err), operations.calls)
+	}
+}
+
+func TestRaidStatusJSONIncludesMarkedHostTrainerCodeButHumanDoesNot(t *testing.T) {
+	raid := &domain.Raid{ID: "raid-9", PokemonID: "150", HostTrainerCode: "123456789012"}
+	players := domain.RaidPlayers{Count: 2, ReadyCount: 1}
+	operations := &stubRaidOperations{found: raid, players: players}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "raid", "status", "--raid-id", "raid-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"hostTrainerCode":"123456789012"`, `"containsSecret":true`, `"warnings":["Värdens tränarkod är hemlig; hantera den säkert."]`} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout=%q missing %s", stdout, want)
+		}
+	}
+
+	operations = &stubRaidOperations{found: raid, players: players}
+	stdout, err = runPrimitiveCommand(t, operations, "token\n", "raid", "status", "--raid-id", "raid-9")
+	if err != nil || strings.Contains(stdout, raid.HostTrainerCode) {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+}
+
+func TestRaidLeaveWithoutVerificationCallsLeaveOnce(t *testing.T) {
+	operations := &stubRaidOperations{}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "raid", "leave", "--raid-id", "raid-9", "--verify=false")
+	if err != nil || stdout != "Begäran att lämna raiden skickades.\n" {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "leave" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+}
+
+func TestRaidLeaveWithoutVerificationRendersRequestedJSON(t *testing.T) {
+	operations := &stubRaidOperations{}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "raid", "leave", "--raid-id", "raid-9", "--verify=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"raid leave\",\"status\":\"requested\",\"data\":{\"requested\":true,\"verified\":false,\"raidId\":\"raid-9\"},\"warnings\":[]}\n"
+	if stdout != want || len(operations.calls) != 1 || operations.calls[0].name != "leave" {
+		t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
+	}
+}
+
+func TestRaidLeaveWithoutVerificationPreservesUnknownWriteOutcome(t *testing.T) {
+	operations := &stubRaidOperations{err: output.NewError(output.CodeWriteOutcomeUnknown, "secret uncertain write")}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "raid", "leave", "--raid-id", "raid-9", "--verify=false")
+	if output.ExitCodeFor(err) != output.ExitWriteOutcomeUnknown || strings.Contains(err.Error(), "secret") || stdout != "" {
+		t.Fatalf("exit=%d stdout=%q err=%v", output.ExitCodeFor(err), stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "leave" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+}
+
+func TestRaidLeaveDefaultVerificationPreservesJSONOutput(t *testing.T) {
+	operations := &stubRaidOperations{}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "raid", "leave", "--raid-id", "raid-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"raid leave\",\"status\":\"left\",\"data\":{\"left\":true,\"raidId\":\"raid-9\"},\"warnings\":[]}\n"
+	if stdout != want || len(operations.calls) != 2 || operations.calls[0].name != "leave" || operations.calls[1].name != "find" {
+		t.Fatalf("stdout=%q calls=%#v", stdout, operations.calls)
 	}
 }
 
@@ -515,7 +671,10 @@ func TestPrimitiveCommandsValidateBeforeCallingOperations(t *testing.T) {
 		{"lobbies", "list", "--page", "0"},
 		{"lobbies", "list", "--host-level", "41"},
 		{"raid", "join", "--raid-id", "raid", "--trainer-name", "A!", "--trainer-level", "50", "--trainer-country", "se"},
+		{"raid", "get"},
+		{"raid", "players"},
 		{"raid", "status"},
+		{"raid", "leave"},
 	} {
 		operations := &stubRaidOperations{}
 		_, err := runPrimitiveCommand(t, operations, "token\n", args...)

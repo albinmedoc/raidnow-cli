@@ -46,6 +46,7 @@ type RaidPlayers struct {
 // Raid is a bounded normalized lobby or matched-raid view.
 type Raid struct {
 	ID                string `json:"id"`
+	HostTrainerCode   string `json:"-"`
 	Rank              string `json:"rank"`
 	PokemonID         string `json:"pokemonId"`
 	HostName          string `json:"hostName,omitempty"`

@@ -431,11 +431,25 @@ func decodeRaidEntry(entry map[string]any) (domain.Raid, bool) {
 	if !ok {
 		return domain.Raid{}, false
 	}
+	hostTrainerCode := exactHostTrainerCode(entry["rpl_code"])
 	return domain.Raid{
-		ID: id, Rank: rank, PokemonID: pokemon, HostName: host, HostLevel: hostLevel, Country: country,
+		ID: id, HostTrainerCode: hostTrainerCode, Rank: rank, PokemonID: pokemon, HostName: host, HostLevel: hostLevel, Country: country,
 		Weather: weather, MaxUsers: maxUsers, Count: count, ReadyCount: readyCount, JoinState: joinState,
 		Deleted: deleted, IsMe: isMe, MinimumGuestLevel: minimumGuestLevel,
 	}, true
+}
+
+func exactHostTrainerCode(value any) string {
+	code, ok := value.(string)
+	if !ok || len(code) != 12 {
+		return ""
+	}
+	for _, digit := range []byte(code) {
+		if digit < '0' || digit > '9' {
+			return ""
+		}
+	}
+	return code
 }
 
 func strictOptionalZeroOne(object map[string]any, key string) (bool, bool) {

@@ -133,6 +133,40 @@ func TestFindRaidPostsExactFormAndDistinguishesAbsenceFromMalformed(t *testing.T
 	assertExactForm(t, forms[0], url.Values{"type": {"par_find_first"}, "possible": {"false"}, "firstaccess": {"raid-2"}, "lang": {"1"}, "token": {"token"}, "hostlevel": {"0"}})
 }
 
+func TestFindRaidStoresOnlyExactHostTrainerCode(t *testing.T) {
+	testCases := []struct {
+		name string
+		code string
+		want string
+	}{
+		{name: "valid", code: `"123456789012"`, want: "123456789012"},
+		{name: "missing"},
+		{name: "blank", code: `""`},
+		{name: "too short", code: `"12345678901"`},
+		{name: "non digit", code: `"12345678901x"`},
+		{name: "unicode digits", code: `"１２３４５６７８９０１２"`},
+		{name: "wrong shape", code: `{}`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			codeField := ""
+			if testCase.code != "" {
+				codeField = `,"rpl_code":` + testCase.code
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(`[{"rpl_id":"raid-2"` + codeField + `}]`))
+			}))
+			defer server.Close()
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+
+			raid, err := client.FindRaid(context.Background(), "token", "raid-2", CallOptions{})
+			if err != nil || raid == nil || raid.HostTrainerCode != testCase.want {
+				t.Fatalf("raid=%#v err=%v want code=%q", raid, err, testCase.want)
+			}
+		})
+	}
+}
+
 func TestListRaidPlayersNormalizesCountryRatingsAndCounts(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/child_list_mixed.json")
 	if err != nil {
