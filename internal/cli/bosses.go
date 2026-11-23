@@ -44,12 +44,16 @@ func newBossesCommand(operations RaidOperations, metadataFetcher MetadataFetcher
 				filtered = append(filtered, boss)
 			}
 		}
-		views, err := bossViews(command, metadataFetcher, filtered)
+		views, skipped, err := bossViews(command, metadataFetcher, filtered)
 		if err != nil {
 			return err
 		}
 		if *jsonOutput {
-			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("bosses list", "listed", views, nil))
+			var warnings []string
+			if skipped > 0 {
+				warnings = []string{fmt.Sprintf("%d raidbossar saknar engelsk metadata och utelämnades.", skipped)}
+			}
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("bosses list", "listed", views, warnings))
 		}
 		for _, boss := range views {
 			if _, err := fmt.Fprintf(command.OutOrStdout(), "%s rank=%s pokemon=%s waiting=%d\n", boss.PokemonName, boss.Rank, boss.PokemonID, boss.WaitingCount); err != nil {
@@ -62,21 +66,26 @@ func newBossesCommand(operations RaidOperations, metadataFetcher MetadataFetcher
 	return command
 }
 
-func bossViews(command *cobra.Command, fetcher MetadataFetcher, bosses []domain.RaidBoss) ([]bossView, error) {
+func bossViews(command *cobra.Command, fetcher MetadataFetcher, bosses []domain.RaidBoss) ([]bossView, int, error) {
 	if len(bosses) == 0 {
-		return []bossView{}, nil
+		return []bossView{}, 0, nil
 	}
 	catalog, err := fetchCatalog(command.Context(), fetcher)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	views := make([]bossView, 0, len(bosses))
+	skipped := 0
 	for _, boss := range bosses {
 		entry, ok := catalog.Lookup(boss.PokemonID)
 		if !ok || strings.TrimSpace(entry.NameEN) == "" {
-			return nil, metadataUnavailableError()
+			skipped++
+			continue
 		}
 		views = append(views, bossView{Rank: boss.Rank, PokemonID: boss.PokemonID, PokemonName: entry.NameEN, ImageURL: entry.ImageURL, WaitingCount: boss.WaitingCount})
+	}
+	if len(views) == 0 && skipped > 0 {
+		return nil, skipped, metadataUnavailableError()
 	}
 	sort.SliceStable(views, func(i, j int) bool {
 		left, _ := strconv.Atoi(views[i].Rank)
@@ -86,5 +95,5 @@ func bossViews(command *cobra.Command, fetcher MetadataFetcher, bosses []domain.
 		}
 		return views[i].PokemonName < views[j].PokemonName
 	})
-	return views, nil
+	return views, skipped, nil
 }

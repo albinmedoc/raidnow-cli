@@ -53,6 +53,26 @@ func TestBossesListRendersJSONViewWithCatalogImageURLs(t *testing.T) {
 	}
 }
 
+func TestBossesListOmitsOnlyEntriesWithoutEnglishMetadata(t *testing.T) {
+	operations := &stubRaidOperations{bosses: []domain.RaidBoss{
+		{Rank: "5", PokemonID: "150", WaitingCount: 4},
+		{Rank: "11", PokemonID: "missing", WaitingCount: 193},
+		{Rank: "4", PokemonID: "blank", WaitingCount: 0},
+	}}
+	catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"150":{"en":"Armored Mewtwo","image":""},"blank":{"image":"https://images.example/blank.png"}};</script>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := runPrimitiveCommandWithMetadata(t, operations, &stubMetadataFetcher{catalog: catalog}, "token\n", "--json", "bosses", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"","waitingCount":4}],"warnings":["2 raidbossar saknar engelsk metadata och utelämnades."]}` + "\n"
+	if stdout != want {
+		t.Fatalf("stdout=%q", stdout)
+	}
+}
+
 func TestBossesListSkipsMetadataForEmptyResults(t *testing.T) {
 	fetcher := &stubMetadataFetcher{err: errors.New("must not be called")}
 	stdout, err := runPrimitiveCommandWithMetadata(t, &stubRaidOperations{}, fetcher, "token\n", "--json", "bosses", "list")
