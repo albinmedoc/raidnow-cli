@@ -23,6 +23,7 @@ type RootOptions struct {
 	Bootstrap      TokenBootstrapper
 	Publisher      TrainerPublisher
 	Operations     RaidOperations
+	Profiles       ProfileOperations
 	Metadata       MetadataFetcher
 	TokenFile      string
 	RequestTimeout time.Duration
@@ -38,6 +39,7 @@ func NewRootCommand() *cobra.Command {
 		Bootstrap:  session.NewBootstrap(http.DefaultClient, BootstrapURL),
 		Publisher:  client,
 		Operations: client,
+		Profiles:   client,
 		Metadata:   metadata.NewHomepageFetcher(http.DefaultClient, BootstrapURL),
 	})
 }
@@ -51,6 +53,9 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	}
 	if options.Operations == nil {
 		options.Operations = defaultUpstreamClient()
+	}
+	if options.Profiles == nil {
+		options.Profiles = defaultUpstreamClient()
 	}
 	if options.Metadata == nil {
 		options.Metadata = metadata.NewHomepageFetcher(http.DefaultClient, BootstrapURL)
@@ -93,6 +98,8 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	command.AddCommand(newBossesCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newLobbiesCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newRaidCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newHistoryCommand(options.Profiles, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newBlocksCommand(options.Profiles, &tokenFile, &requestTimeout, &jsonOutput))
 	return command
 }
 

@@ -22,6 +22,167 @@ func decodeJSON(raw json.RawMessage) (any, error) {
 	return value, nil
 }
 
+func decodeProfileCookie(raw json.RawMessage) error {
+	object, err := decodeObject(raw)
+	if err != nil {
+		return authenticationUnsupported()
+	}
+	status, ok := exactScalar(object["status"])
+	if !ok || status != "success" {
+		return authenticationUnsupported()
+	}
+	cookieValue, ok := object["cookie_id"].(string)
+	if !ok {
+		return authenticationUnsupported()
+	}
+	cookieID, ok := boundedScalar(cookieValue, true)
+	if !ok || strings.TrimSpace(cookieID) == "" {
+		return authenticationUnsupported()
+	}
+	return nil
+}
+
+func decodeProfileHistory(raw json.RawMessage, includeGuest bool) ([]domain.ProfileHistoryRecord, error) {
+	value, err := decodeJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	list, ok := value.([]any)
+	if !ok {
+		return nil, upstreamRejection()
+	}
+	records := make([]domain.ProfileHistoryRecord, 0, len(list))
+	for _, item := range list {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil, upstreamRejection()
+		}
+		record, ok := decodeProfileHistoryRecord(entry, includeGuest)
+		if !ok {
+			return nil, upstreamRejection()
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+func decodeBlocks(raw json.RawMessage) ([]domain.BlockRecord, error) {
+	value, err := decodeJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	list, ok := value.([]any)
+	if !ok {
+		return nil, upstreamRejection()
+	}
+	blocks := make([]domain.BlockRecord, 0, len(list))
+	for _, item := range list {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil, upstreamRejection()
+		}
+		id, idOK := boundedScalar(entry["rplb_id"], true)
+		name, nameOK := boundedScalar(entry["rplb_tid"], true)
+		if !idOK || !nameOK {
+			return nil, upstreamRejection()
+		}
+		blocks = append(blocks, domain.BlockRecord{BlockID: id, TrainerName: name})
+	}
+	return blocks, nil
+}
+
+func decodeProfileHistoryRecord(entry map[string]any, includeGuest bool) (domain.ProfileHistoryRecord, bool) {
+	raidID, ok := boundedScalar(entry["rpl_id"], true)
+	if !ok {
+		return domain.ProfileHistoryRecord{}, false
+	}
+	displayTime, ok := strictOptionalBoundedScalar(entry, "rpl_insert")
+	if !ok {
+		return domain.ProfileHistoryRecord{}, false
+	}
+	pokemonID, ok := boundedScalar(entry["rpl_pokemon"], true)
+	if !ok {
+		return domain.ProfileHistoryRecord{}, false
+	}
+	trainerName, ok := strictOptionalBoundedScalar(entry, "rpl_tid")
+	if !ok {
+		return domain.ProfileHistoryRecord{}, false
+	}
+	level, ok := profileNonnegativeInt(entry, "rpl_level")
+	if !ok {
+		return domain.ProfileHistoryRecord{}, false
+	}
+	country, ok := normalizeCountry(entry["rpl_country_code"], entry["rpl_lang"])
+	if !ok {
+		return domain.ProfileHistoryRecord{}, false
+	}
+	rating, ok := profileRating(entry, "evaluatescore")
+	if !ok {
+		return domain.ProfileHistoryRecord{}, false
+	}
+	record := domain.ProfileHistoryRecord{RaidID: raidID, DisplayTime: displayTime, PokemonID: pokemonID, TrainerName: trainerName, Level: level, Country: country, Rating: rating}
+	if includeGuest {
+		guest, ok := decodeProfileGuest(entry)
+		if !ok {
+			return domain.ProfileHistoryRecord{}, false
+		}
+		record.Guest = guest
+	}
+	return record, true
+}
+
+func decodeProfileGuest(entry map[string]any) (*domain.ProfileGuest, bool) {
+	name, namePresent, ok := optionalBoundedValue(entry, "rplc_tid")
+	if !ok {
+		return nil, false
+	}
+	levelValue, levelPresent := entry["rplc_level"]
+	countryValue, countryPresent := entry["rplc_country_code"]
+	languageValue, languagePresent := entry["rplc_lang"]
+	_, ratingPresent := entry["evaluatescore_guest"]
+	if !namePresent && !levelPresent && !countryPresent && !languagePresent && !ratingPresent {
+		return nil, true
+	}
+	if !namePresent || strings.TrimSpace(name) == "" {
+		return nil, false
+	}
+	level, ok := optionalNonnegativeInt(entry, "rplc_level", 0)
+	if !ok || (levelPresent && levelValue == nil) {
+		return nil, false
+	}
+	country, ok := normalizeCountry(countryValue, languageValue)
+	if !ok {
+		return nil, false
+	}
+	rating, ok := profileRating(entry, "evaluatescore_guest")
+	if !ok {
+		return nil, false
+	}
+	return &domain.ProfileGuest{TrainerName: name, Level: level, Country: country, Rating: rating}, true
+}
+
+func profileNonnegativeInt(object map[string]any, key string) (int, bool) {
+	value, present := object[key]
+	if !present {
+		return 0, true
+	}
+	if value == nil {
+		return 0, false
+	}
+	return optionalNonnegativeInt(object, key, 0)
+}
+
+func profileRating(object map[string]any, key string) (*int, bool) {
+	value, present := object[key]
+	if !present {
+		return nil, true
+	}
+	if value == nil {
+		return nil, false
+	}
+	return normalizeRating(value, nil)
+}
+
 func decodeQueuePoll(raw json.RawMessage) (domain.QueuePoll, error) {
 	object, err := decodeObject(raw)
 	if err != nil {

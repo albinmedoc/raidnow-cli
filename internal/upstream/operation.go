@@ -21,6 +21,12 @@ const (
 	ChildPostFast
 	GuestRaidDelPost
 	GuestReadyPost
+	CookieGet
+	MyListGet
+	JoinListGet
+	KickListGet
+	DeleteListGet
+	BlockGet
 )
 
 // OperationDescriptor is an immutable view of centrally registered operation
@@ -65,6 +71,18 @@ func (operation Operation) Descriptor() (OperationDescriptor, error) {
 		return OperationDescriptor{name: "guest_raid_del_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
 	case GuestReadyPost:
 		return OperationDescriptor{name: "guest_ready_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
+	case CookieGet:
+		return OperationDescriptor{name: "cookie_get", kind: ReadOperation, timeout: 10 * time.Second}, nil
+	case MyListGet:
+		return OperationDescriptor{name: "mylist_get", kind: ReadOperation, timeout: 10 * time.Second}, nil
+	case JoinListGet:
+		return OperationDescriptor{name: "joinlist_get", kind: ReadOperation, timeout: 10 * time.Second}, nil
+	case KickListGet:
+		return OperationDescriptor{name: "kicklist_get", kind: ReadOperation, timeout: 10 * time.Second}, nil
+	case DeleteListGet:
+		return OperationDescriptor{name: "deletelist_get", kind: ReadOperation, timeout: 10 * time.Second}, nil
+	case BlockGet:
+		return OperationDescriptor{name: "block_get", kind: ReadOperation, timeout: 10 * time.Second}, nil
 	default:
 		return OperationDescriptor{}, invalidArguments("Ogiltig upstream-operation.")
 	}
