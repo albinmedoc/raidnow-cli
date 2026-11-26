@@ -32,6 +32,30 @@ func TestParseExtractsRealisticAryPokemonCatalog(t *testing.T) {
 	}
 }
 
+func TestParseExtractsShinyAndEncounterCPMetadata(t *testing.T) {
+	catalog, err := Parse([]byte(`<script>const aryPokemon={
+		"attack":{"en":"Deoxys Attack Forme","shiny":1,"maxcp20":1474,"maxcp25":1842},
+		"legacy":{"en":"Legacy Boss","shiny":"1","maxcp20":900,"maxcp25":""},
+		"ordinary":{"en":"Ordinary Boss"}
+	};</script>`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	attack, ok := catalog.Lookup("attack")
+	if !ok || !attack.ShinyAvailable || attack.MaxCP20 == nil || *attack.MaxCP20 != 1474 || attack.MaxCP25 == nil || *attack.MaxCP25 != 1842 {
+		t.Fatalf("attack entry = %#v, %v", attack, ok)
+	}
+	legacy, ok := catalog.Lookup("legacy")
+	if !ok || !legacy.ShinyAvailable || legacy.MaxCP20 == nil || *legacy.MaxCP20 != 900 || legacy.MaxCP25 != nil {
+		t.Fatalf("legacy entry = %#v, %v", legacy, ok)
+	}
+	ordinary, ok := catalog.Lookup("ordinary")
+	if !ok || ordinary.ShinyAvailable || ordinary.MaxCP20 != nil || ordinary.MaxCP25 != nil {
+		t.Fatalf("ordinary entry = %#v, %v", ordinary, ok)
+	}
+}
+
 func TestParseSupportsConventionalTopLevelDeclarations(t *testing.T) {
 	for _, declaration := range []string{"var", "let", "const"} {
 		t.Run(declaration, func(t *testing.T) {
@@ -104,7 +128,7 @@ func TestParseRequiresExactlyOneCompleteObjectDeclaration(t *testing.T) {
 
 func TestParsePreservesExactIDsAndCatalogDefendsItsCollection(t *testing.T) {
 	const exactID = "  exact-id  "
-	catalog, err := Parse([]byte(`<script>var aryPokemon={"` + exactID + `":{"en":"A"},"z":{}};</script>`))
+	catalog, err := Parse([]byte(`<script>var aryPokemon={"` + exactID + `":{"en":"A","maxcp20":100},"z":{}};</script>`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -117,8 +141,13 @@ func TestParsePreservesExactIDsAndCatalogDefendsItsCollection(t *testing.T) {
 		t.Fatalf("List() = %#v", entries)
 	}
 	entries[0] = Entry{}
+	mutable, ok := catalog.Lookup(exactID)
+	if !ok || mutable.MaxCP20 == nil {
+		t.Fatal("exact entry missing CP metadata")
+	}
+	*mutable.MaxCP20 = 200
 	again, ok := catalog.Lookup(exactID)
-	if !ok || again.NameEN != "A" {
+	if !ok || again.NameEN != "A" || again.MaxCP20 == nil || *again.MaxCP20 != 100 {
 		t.Fatal("caller mutation changed catalog")
 	}
 }
@@ -135,19 +164,30 @@ func TestParseEnforcesInputScriptCatalogAndFieldBounds(t *testing.T) {
 	tooMany.WriteString(`};</script>`)
 
 	for name, body := range map[string][]byte{
-		"invalid_utf8":     append([]byte(`<script>var aryPokemon={"`), 0xff),
-		"html_too_large":   []byte(`<script>var aryPokemon={"id":{}};</script>` + strings.Repeat("x", MaxHTMLBytes)),
-		"script_too_large": []byte(`<script>` + strings.Repeat(" ", MaxExecutableScriptBytes) + `var aryPokemon={"id":{}};</script>`),
-		"empty_catalog":    []byte(`<script>var aryPokemon={};</script>`),
-		"empty_id":         []byte(`<script>var aryPokemon={"":{}};</script>`),
-		"blank_id":         []byte(`<script>var aryPokemon={"   ":{}};</script>`),
-		"id_too_long":      []byte(`<script>var aryPokemon={"` + strings.Repeat("i", MaxIDBytes+1) + `":{}};</script>`),
-		"name_too_long":    []byte(`<script>var aryPokemon={"id":{"en":"` + strings.Repeat("n", MaxNameBytes+1) + `"}};</script>`),
-		"url_too_long":     []byte(`<script>var aryPokemon={"id":{"image":"` + strings.Repeat("u", MaxImageURLBytes+1) + `"}};</script>`),
-		"too_many":         []byte(tooMany.String()),
-		"entry_null":       []byte(`<script>var aryPokemon={"id":null};</script>`),
-		"name_number":      []byte(`<script>var aryPokemon={"id":{"en":7}};</script>`),
-		"control_name":     []byte(`<script>var aryPokemon={"id":{"en":"bad\u0007name"}};</script>`),
+		"invalid_utf8":       append([]byte(`<script>var aryPokemon={"`), 0xff),
+		"html_too_large":     []byte(`<script>var aryPokemon={"id":{}};</script>` + strings.Repeat("x", MaxHTMLBytes)),
+		"script_too_large":   []byte(`<script>` + strings.Repeat(" ", MaxExecutableScriptBytes) + `var aryPokemon={"id":{}};</script>`),
+		"empty_catalog":      []byte(`<script>var aryPokemon={};</script>`),
+		"empty_id":           []byte(`<script>var aryPokemon={"":{}};</script>`),
+		"blank_id":           []byte(`<script>var aryPokemon={"   ":{}};</script>`),
+		"id_too_long":        []byte(`<script>var aryPokemon={"` + strings.Repeat("i", MaxIDBytes+1) + `":{}};</script>`),
+		"name_too_long":      []byte(`<script>var aryPokemon={"id":{"en":"` + strings.Repeat("n", MaxNameBytes+1) + `"}};</script>`),
+		"url_too_long":       []byte(`<script>var aryPokemon={"id":{"image":"` + strings.Repeat("u", MaxImageURLBytes+1) + `"}};</script>`),
+		"too_many":           []byte(tooMany.String()),
+		"entry_null":         []byte(`<script>var aryPokemon={"id":null};</script>`),
+		"name_number":        []byte(`<script>var aryPokemon={"id":{"en":7}};</script>`),
+		"control_name":       []byte(`<script>var aryPokemon={"id":{"en":"bad\u0007name"}};</script>`),
+		"shiny_boolean":      []byte(`<script>var aryPokemon={"id":{"shiny":true}};</script>`),
+		"shiny_out_of_range": []byte(`<script>var aryPokemon={"id":{"shiny":2}};</script>`),
+		"shiny_null":         []byte(`<script>var aryPokemon={"id":{"shiny":null}};</script>`),
+		"cp_zero":            []byte(`<script>var aryPokemon={"id":{"maxcp20":0}};</script>`),
+		"cp_negative":        []byte(`<script>var aryPokemon={"id":{"maxcp20":-1}};</script>`),
+		"cp_fractional":      []byte(`<script>var aryPokemon={"id":{"maxcp20":1474.5}};</script>`),
+		"cp_numeric_string":  []byte(`<script>var aryPokemon={"id":{"maxcp20":"1474"}};</script>`),
+		"cp_null":            []byte(`<script>var aryPokemon={"id":{"maxcp20":null}};</script>`),
+		"duplicate_id":       []byte(`<script>var aryPokemon={"id":{"en":"bad"},"id":{"en":"good"}};</script>`),
+		"duplicate_shiny":    []byte(`<script>var aryPokemon={"id":{"shiny":null,"shiny":1}};</script>`),
+		"duplicate_cp":       []byte(`<script>var aryPokemon={"id":{"maxcp20":null,"maxcp20":1474}};</script>`),
 	} {
 		t.Run(name, func(t *testing.T) { assertRejected(t, body) })
 	}

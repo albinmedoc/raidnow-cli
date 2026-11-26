@@ -39,7 +39,7 @@ func TestBossesListRendersJSONViewWithCatalogImageURLs(t *testing.T) {
 		{Rank: "5", PokemonID: "150", WaitingCount: 4},
 		{Rank: "3", PokemonID: "25", WaitingCount: 2},
 	}}
-	catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"150":{"en":"Armored Mewtwo","image":"https://images.example/150.png"},"25":{"en":"Pikachu","image":""}};</script>`))
+	catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"150":{"en":"Armored Mewtwo","image":"https://images.example/150.png","shiny":1,"maxcp20":1740,"maxcp25":2175},"25":{"en":"Pikachu","image":"","shiny":0}};</script>`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestBossesListRendersJSONViewWithCatalogImageURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"https://images.example/150.png","waitingCount":4},{"rank":"3","pokemonId":"25","pokemonName":"Pikachu","imageUrl":"","waitingCount":2}],"warnings":[]}` + "\n"
+	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"https://images.example/150.png","shinyAvailable":true,"maxCP20":1740,"maxCP25":2175,"waitingCount":4},{"rank":"3","pokemonId":"25","pokemonName":"Pikachu","imageUrl":"","shinyAvailable":false,"maxCP20":null,"maxCP25":null,"waitingCount":2}],"warnings":[]}` + "\n"
 	if stdout != want {
 		t.Fatalf("stdout=%q", stdout)
 	}
@@ -67,7 +67,7 @@ func TestBossesListOmitsOnlyEntriesWithoutEnglishMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"","waitingCount":4}],"warnings":["2 raidbossar saknar engelsk metadata och utelämnades."]}` + "\n"
+	want := `{"schemaVersion":1,"ok":true,"command":"bosses list","status":"listed","data":[{"rank":"5","pokemonId":"150","pokemonName":"Armored Mewtwo","imageUrl":"","shinyAvailable":false,"maxCP20":null,"maxCP25":null,"waitingCount":4}],"warnings":["2 raidbossar saknar engelsk metadata och utelämnades."]}` + "\n"
 	if stdout != want {
 		t.Fatalf("stdout=%q", stdout)
 	}

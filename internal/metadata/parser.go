@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"regexp"
 	"strings"
 	"unicode"
@@ -56,7 +57,7 @@ func Parse(body []byte) (catalog Catalog, err error) {
 	}
 
 	var raw map[string]json.RawMessage
-	if json.Unmarshal(candidates[0], &raw) != nil || len(raw) == 0 || len(raw) > MaxEntries {
+	if !hasUniqueJSONKeys(candidates[0]) || json.Unmarshal(candidates[0], &raw) != nil || len(raw) == 0 || len(raw) > MaxEntries {
 		return Catalog{}, ErrInvalidMetadata
 	}
 	entries := make(map[string]Entry, len(raw))
@@ -69,15 +70,119 @@ func Parse(body []byte) (catalog Catalog, err error) {
 			return Catalog{}, ErrInvalidMetadata
 		}
 		var fields struct {
-			NameEN   string `json:"en"`
-			ImageURL string `json:"image"`
+			NameEN   string          `json:"en"`
+			ImageURL string          `json:"image"`
+			Shiny    json.RawMessage `json:"shiny"`
+			MaxCP20  json.RawMessage `json:"maxcp20"`
+			MaxCP25  json.RawMessage `json:"maxcp25"`
 		}
 		if json.Unmarshal(value, &fields) != nil || len(fields.NameEN) > MaxNameBytes || len(fields.ImageURL) > MaxImageURLBytes || !safeText(fields.NameEN) || !safeText(fields.ImageURL) {
 			return Catalog{}, ErrInvalidMetadata
 		}
-		entries[id] = Entry{ID: id, NameEN: fields.NameEN, ImageURL: fields.ImageURL}
+		shinyAvailable, shinyErr := parseShiny(fields.Shiny)
+		maxCP20, maxCP20Err := parseEncounterCP(fields.MaxCP20)
+		maxCP25, maxCP25Err := parseEncounterCP(fields.MaxCP25)
+		if shinyErr != nil || maxCP20Err != nil || maxCP25Err != nil {
+			return Catalog{}, ErrInvalidMetadata
+		}
+		entries[id] = Entry{
+			ID:             id,
+			NameEN:         fields.NameEN,
+			ImageURL:       fields.ImageURL,
+			ShinyAvailable: shinyAvailable,
+			MaxCP20:        maxCP20,
+			MaxCP25:        maxCP25,
+		}
 	}
 	return Catalog{entries: entries}, nil
+}
+
+func hasUniqueJSONKeys(source []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(source))
+	decoder.UseNumber()
+	if validateJSONValue(decoder) != nil {
+		return false
+	}
+	_, err := decoder.Token()
+	return errors.Is(err, io.EOF)
+}
+
+func validateJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		keys := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, keyErr := decoder.Token()
+			key, keyOK := keyToken.(string)
+			if keyErr != nil || !keyOK {
+				return ErrInvalidMetadata
+			}
+			if _, duplicate := keys[key]; duplicate {
+				return ErrInvalidMetadata
+			}
+			keys[key] = struct{}{}
+			if valueErr := validateJSONValue(decoder); valueErr != nil {
+				return valueErr
+			}
+		}
+		end, endErr := decoder.Token()
+		if endErr != nil || end != json.Delim('}') {
+			return ErrInvalidMetadata
+		}
+	case '[':
+		for decoder.More() {
+			if valueErr := validateJSONValue(decoder); valueErr != nil {
+				return valueErr
+			}
+		}
+		end, endErr := decoder.Token()
+		if endErr != nil || end != json.Delim(']') {
+			return ErrInvalidMetadata
+		}
+	default:
+		return ErrInvalidMetadata
+	}
+	return nil
+}
+
+func parseShiny(raw json.RawMessage) (bool, error) {
+	if len(raw) == 0 {
+		return false, nil
+	}
+	switch string(bytes.TrimSpace(raw)) {
+	case "0", `"0"`:
+		return false, nil
+	case "1", `"1"`:
+		return true, nil
+	default:
+		return false, ErrInvalidMetadata
+	}
+}
+
+func parseEncounterCP(raw json.RawMessage) (*int, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var value int
+	if json.Unmarshal(raw, &value) == nil {
+		if value <= 0 {
+			return nil, ErrInvalidMetadata
+		}
+		return &value, nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil && strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	return nil, ErrInvalidMetadata
 }
 
 func aryPokemonObjects(source []byte) ([][]byte, error) {

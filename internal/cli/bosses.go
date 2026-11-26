@@ -13,11 +13,14 @@ import (
 )
 
 type bossView struct {
-	Rank         string `json:"rank"`
-	PokemonID    string `json:"pokemonId"`
-	PokemonName  string `json:"pokemonName"`
-	ImageURL     string `json:"imageUrl"`
-	WaitingCount int    `json:"waitingCount"`
+	Rank           string `json:"rank"`
+	PokemonID      string `json:"pokemonId"`
+	PokemonName    string `json:"pokemonName"`
+	ImageURL       string `json:"imageUrl"`
+	ShinyAvailable bool   `json:"shinyAvailable"`
+	MaxCP20        *int   `json:"maxCP20"`
+	MaxCP25        *int   `json:"maxCP25"`
+	WaitingCount   int    `json:"waitingCount"`
 }
 
 func newBossesCommand(operations RaidOperations, metadataFetcher MetadataFetcher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
@@ -82,7 +85,16 @@ func bossViews(command *cobra.Command, fetcher MetadataFetcher, bosses []domain.
 			skipped++
 			continue
 		}
-		views = append(views, bossView{Rank: boss.Rank, PokemonID: boss.PokemonID, PokemonName: entry.NameEN, ImageURL: entry.ImageURL, WaitingCount: boss.WaitingCount})
+		views = append(views, bossView{
+			Rank:           boss.Rank,
+			PokemonID:      boss.PokemonID,
+			PokemonName:    entry.NameEN,
+			ImageURL:       entry.ImageURL,
+			ShinyAvailable: entry.ShinyAvailable,
+			MaxCP20:        entry.MaxCP20,
+			MaxCP25:        entry.MaxCP25,
+			WaitingCount:   boss.WaitingCount,
+		})
 	}
 	if len(views) == 0 && skipped > 0 {
 		return nil, skipped, metadataUnavailableError()
