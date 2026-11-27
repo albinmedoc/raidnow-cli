@@ -27,6 +27,10 @@ type RaidOperations interface {
 	ListRaidPlayers(context.Context, string, string, upstream.CallOptions) (domain.RaidPlayers, error)
 	LeaveRaid(context.Context, string, string, upstream.CallOptions) error
 	ReadyRaid(context.Context, string, string, upstream.CallOptions) error
+	CreateHostedRaid(context.Context, string, domain.Trainer, upstream.HostLobbyInput, upstream.CallOptions) (domain.Raid, error)
+	CloseHostedRaid(context.Context, string, string, upstream.CallOptions) error
+	StartHostedRaid(context.Context, string, string, upstream.CallOptions) error
+	KickHostedGuest(context.Context, string, string, string, upstream.CallOptions) error
 }
 
 type MetadataFetcher interface {
@@ -247,6 +251,192 @@ func newLobbiesCommand(operations RaidOperations, metadataFetcher MetadataFetche
 		return nil
 	}
 	command.AddCommand(list)
+	return command
+}
+
+func newHostCommand(operations RaidOperations, metadataFetcher MetadataFetcher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	command := &cobra.Command{Use: "host", Short: "Create and manage a hosted raid lobby", Args: usageNoArgs}
+	command.RunE = helpRun
+	command.AddCommand(newHostCreateCommand(operations, metadataFetcher, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newHostStatusCommand(operations, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newHostCloseCommand(operations, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newHostStartCommand(operations, tokenFile, requestTimeout, jsonOutput))
+	command.AddCommand(newHostKickCommand(operations, tokenFile, requestTimeout, jsonOutput))
+	return command
+}
+
+func newHostCreateCommand(operations RaidOperations, metadataFetcher MetadataFetcher, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	var startDate, pokemonID, currentWeatherName, gymColorName, passTypeName, guestRatingName string
+	var span, maxUsers, guestLevel int
+	var private, weatherBoosted, invitationOnly, hot, megaPokemonEntry bool
+	command := &cobra.Command{Use: "create", Short: "Create one hosted raid lobby", Args: usageNoArgs}
+	trainerInput := bindTrainerInputFlags(command)
+	flags := command.Flags()
+	flags.StringVar(&startDate, "start-date", "", "Raid start date as YYYY/MM/DD HH:MM:SS")
+	flags.StringVar(&pokemonID, "pokemon", "", "Exact Pokemon/form ID from Raid NOW metadata")
+	flags.IntVar(&span, "span", 45, "Raid availability span in minutes")
+	flags.StringVar(&currentWeatherName, "current-weather", "unknown", "In-game weather: unknown|sunny|clear-night|partly-cloudy|partly-cloudy-night|cloudy|rain|snow|windy|fog")
+	flags.IntVar(&maxUsers, "max-users", 5, "Maximum lobby users (1-10)")
+	flags.StringVar(&gymColorName, "gym-color", "neutral", "Gym team: neutral|valor|mystic|instinct")
+	flags.StringVar(&passTypeName, "pass-type", "remote", "Host pass type: remote|local")
+	flags.BoolVar(&private, "private", false, "Create a private lobby")
+	flags.BoolVar(&weatherBoosted, "weather-boosted", false, "Mark the raid boss as weather boosted")
+	flags.IntVar(&guestLevel, "guest-level", 5, "Minimum guest level: 5|40|50|60|70")
+	flags.StringVar(&guestRatingName, "guest-rating", "all", "Minimum guest rating: all|0|1|2|3|4|5")
+	flags.BoolVar(&invitationOnly, "invitation-only", false, "Show invitation-only raids")
+	flags.BoolVar(&hot, "hot", false, "Enable Raid NOW HOT/group-code flow")
+	flags.BoolVar(&megaPokemonEntry, "mega-pokemon-entry", false, "Allow Mega Pokemon in the raid")
+	command.RunE = func(command *cobra.Command, _ []string) error {
+		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || strings.TrimSpace(startDate) == "" || strings.TrimSpace(pokemonID) == "" ||
+			span <= 0 || maxUsers < 1 || maxUsers > 10 || (*tokenFile == "-" && trainerInput.codeFile == "-") {
+			return newUsageError()
+		}
+		currentWeather, weatherOK := hostCurrentWeather(currentWeatherName)
+		gymColor, gymOK := hostGymColor(gymColorName)
+		passType, passOK := hostPassType(passTypeName)
+		guestLevelValue, levelOK := hostGuestLevel(guestLevel)
+		guestRating, ratingOK := hostGuestRating(guestRatingName)
+		if !weatherOK || !gymOK || !passOK || !levelOK || !ratingOK || (passType == 0 && maxUsers == 10) {
+			return newUsageError()
+		}
+		catalog, err := fetchCatalog(command.Context(), metadataFetcher)
+		if err != nil {
+			return err
+		}
+		entry, ok := catalog.Lookup(strings.TrimSpace(pokemonID))
+		if !ok || strings.TrimSpace(entry.CurrentRaidRank) == "" || !entry.HasWeatherBoosts {
+			return metadataUnavailableError()
+		}
+		token, err := readCommandToken(command, *tokenFile)
+		if err != nil {
+			return err
+		}
+		trainer, err := trainerInput.read(command)
+		if err != nil {
+			return err
+		}
+		weather := 0
+		if weatherBoosted {
+			weather = 1
+		}
+		input := upstream.HostLobbyInput{
+			StartDate: startDate, Rank: entry.CurrentRaidRank, PokemonID: entry.ID, Span: span,
+			Color: 0, Weather: weather, CurrentWeather: currentWeather, MaxUsers: maxUsers,
+			GymColor: gymColor, PassType: passType, Private: private, Possible: false,
+			GuestLevel: guestLevelValue, GuestScore: guestRating, InvitationOnly: invitationOnly, Hot: hot,
+			MegaPokemonEntry: megaPokemonEntry, WeatherBoosts: append([]string(nil), entry.WeatherBoosts...),
+		}
+		raid, err := operations.CreateHostedRaid(command.Context(), token, trainer, input, callOptions(requestTimeout))
+		if err != nil {
+			return sanitizedPublisherError(err)
+		}
+		if *jsonOutput {
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("host create", "created", struct {
+				Created bool   `json:"created"`
+				RaidID  string `json:"raidId"`
+			}{Created: true, RaidID: raid.ID}, nil))
+		}
+		_, err = fmt.Fprintf(command.OutOrStdout(), "Lobbyn skapades: %s\n", raid.ID)
+		return err
+	}
+	return command
+}
+
+func newHostStatusCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	var raidID string
+	command := &cobra.Command{Use: "status", Short: "Read one hosted lobby's guests", Args: usageNoArgs}
+	command.Flags().StringVar(&raidID, "raid-id", "", "Exact raid ID")
+	command.RunE = func(command *cobra.Command, _ []string) error {
+		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || raidID == "" {
+			return newUsageError()
+		}
+		token, err := readCommandToken(command, *tokenFile)
+		if err != nil {
+			return err
+		}
+		players, err := operations.ListRaidPlayers(command.Context(), token, raidID, callOptions(requestTimeout))
+		if err != nil {
+			return sanitizedPublisherError(err)
+		}
+		if *jsonOutput {
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("host status", "listed", players, nil))
+		}
+		if _, err = fmt.Fprintf(command.OutOrStdout(), "players=%d ready=%d deleted=%t\n", players.Count, players.ReadyCount, players.RaidDeleted); err != nil {
+			return err
+		}
+		for _, player := range players.Players {
+			rating := "none"
+			if player.Rating != nil {
+				rating = fmt.Sprint(*player.Rating)
+			}
+			if _, err = fmt.Fprintf(command.OutOrStdout(), "guest-id=%s %s level=%d country=%s rating=%s ready=%t\n", player.ID, player.TrainerName, player.Level, player.Country, rating, player.Ready); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return command
+}
+
+func newHostCloseCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	return newHostRaidActionCommand("close", "Close one hosted lobby", "closed", "Lobbyn stängdes.", operations.CloseHostedRaid, operations, tokenFile, requestTimeout, jsonOutput)
+}
+
+func newHostStartCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	return newHostRaidActionCommand("start", "Announce that a hosted raid is starting", "started", "Raidstart markerad.", operations.StartHostedRaid, operations, tokenFile, requestTimeout, jsonOutput)
+}
+
+func newHostRaidActionCommand(name, short, status, human string, action func(context.Context, string, string, upstream.CallOptions) error, operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	var raidID string
+	command := &cobra.Command{Use: name, Short: short, Args: usageNoArgs}
+	command.Flags().StringVar(&raidID, "raid-id", "", "Exact raid ID")
+	command.RunE = func(command *cobra.Command, _ []string) error {
+		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || action == nil || raidID == "" {
+			return newUsageError()
+		}
+		token, err := readCommandToken(command, *tokenFile)
+		if err != nil {
+			return err
+		}
+		if err := action(command.Context(), token, raidID, callOptions(requestTimeout)); err != nil {
+			return sanitizedPublisherError(err)
+		}
+		if *jsonOutput {
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("host "+name, status, struct {
+				RaidID string `json:"raidId"`
+			}{RaidID: raidID}, nil))
+		}
+		_, err = fmt.Fprintln(command.OutOrStdout(), human)
+		return err
+	}
+	return command
+}
+
+func newHostKickCommand(operations RaidOperations, tokenFile *string, requestTimeout *time.Duration, jsonOutput *bool) *cobra.Command {
+	var raidID, guestID string
+	command := &cobra.Command{Use: "kick", Short: "Kick one guest from a hosted lobby", Args: usageNoArgs}
+	command.Flags().StringVar(&raidID, "raid-id", "", "Exact raid ID")
+	command.Flags().StringVar(&guestID, "guest-id", "", "Exact guest ID from host status")
+	command.RunE = func(command *cobra.Command, _ []string) error {
+		if invalidPrimitiveSetup(operations, tokenFile, requestTimeout) || raidID == "" || guestID == "" {
+			return newUsageError()
+		}
+		token, err := readCommandToken(command, *tokenFile)
+		if err != nil {
+			return err
+		}
+		if err := operations.KickHostedGuest(command.Context(), token, raidID, guestID, callOptions(requestTimeout)); err != nil {
+			return sanitizedPublisherError(err)
+		}
+		if *jsonOutput {
+			return output.RenderJSON(command.OutOrStdout(), output.NewSuccess("host kick", "kicked", struct {
+				RaidID  string `json:"raidId"`
+				GuestID string `json:"guestId"`
+			}{RaidID: raidID, GuestID: guestID}, nil))
+		}
+		_, err = fmt.Fprintln(command.OutOrStdout(), "Gästen kickades.")
+		return err
+	}
 	return command
 }
 
@@ -622,6 +812,59 @@ func catalogName(catalog metadata.Catalog, id string) (string, bool) {
 		return "", false
 	}
 	return entry.NameEN, true
+}
+
+func hostCurrentWeather(value string) (int, bool) {
+	values := map[string]int{
+		"unknown": 0, "sunny": 1, "clear-night": 2, "partly-cloudy": 3,
+		"partly-cloudy-night": 4, "cloudy": 5, "rain": 6, "snow": 7, "windy": 8, "fog": 9,
+	}
+	result, ok := values[strings.ToLower(strings.TrimSpace(value))]
+	return result, ok
+}
+
+func hostGymColor(value string) (int, bool) {
+	values := map[string]int{"neutral": 0, "valor": 1, "mystic": 2, "instinct": 3}
+	result, ok := values[strings.ToLower(strings.TrimSpace(value))]
+	return result, ok
+}
+
+func hostPassType(value string) (int, bool) {
+	values := map[string]int{"remote": 0, "local": 1}
+	result, ok := values[strings.ToLower(strings.TrimSpace(value))]
+	return result, ok
+}
+
+func hostGuestLevel(value int) (int, bool) {
+	switch value {
+	case 5:
+		return 0, true
+	case 40, 50, 60, 70:
+		return value, true
+	default:
+		return 0, false
+	}
+}
+
+func hostGuestRating(value string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "all":
+		return 0, true
+	case "0":
+		return -1, true
+	case "1":
+		return 1, true
+	case "2":
+		return 2, true
+	case "3":
+		return 3, true
+	case "4":
+		return 4, true
+	case "5":
+		return 5, true
+	default:
+		return 0, false
+	}
 }
 
 func metadataUnavailableError() error {

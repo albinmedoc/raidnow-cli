@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,66 @@ func TestParseExtractsRealisticAryPokemonCatalog(t *testing.T) {
 	escaped, ok := catalog.Lookup("escaped")
 	if !ok || escaped.NameEN != "Quote: \" brace: } slash: \\ semicolon: ; 雪" {
 		t.Fatalf("escaped entry = %#v, %v", escaped, ok)
+	}
+}
+
+func TestParseExtractsHostLobbyMetadata(t *testing.T) {
+	catalog, err := Parse([]byte(`<script>jQuery(function($){ const aryPokemon={
+		"ピカチュウ(太陽の冠)":{"en":"Pikachu sun crown","poke_raid_rank":"1","weather":["rain"]},
+		"メガスピアー":{"en":"Mega Beedrill","poke_raid_rank":4,"weather":["rain","cloudy"]},
+		"unboosted":{"en":"Unboosted","poke_raid_rank":"5","weather":[]},
+		"stale":{"en":"Stale","poke_raid_rank":"1","weather":["sunny"]}
+	}; const aryPokeRaid={"1":["ピカチュウ(太陽の冠)"],"4":["メガスピアー"],"5":["unboosted"]}; });</script>`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	pikachu, ok := catalog.Lookup("ピカチュウ(太陽の冠)")
+	if !ok || pikachu.RaidRank != "1" || pikachu.CurrentRaidRank != "1" || !pikachu.HasWeatherBoosts || !reflect.DeepEqual(pikachu.WeatherBoosts, []string{"rain"}) {
+		t.Fatalf("pikachu=%#v ok=%v", pikachu, ok)
+	}
+	mega, ok := catalog.Lookup("メガスピアー")
+	if !ok || mega.RaidRank != "4" || mega.CurrentRaidRank != "4" || !mega.HasWeatherBoosts || !reflect.DeepEqual(mega.WeatherBoosts, []string{"rain", "cloudy"}) {
+		t.Fatalf("mega=%#v ok=%v", mega, ok)
+	}
+	unboosted, ok := catalog.Lookup("unboosted")
+	if !ok || unboosted.CurrentRaidRank != "5" || !unboosted.HasWeatherBoosts || len(unboosted.WeatherBoosts) != 0 {
+		t.Fatalf("unboosted=%#v ok=%v", unboosted, ok)
+	}
+	stale, ok := catalog.Lookup("stale")
+	if !ok || stale.CurrentRaidRank != "" {
+		t.Fatalf("stale=%#v ok=%v", stale, ok)
+	}
+	mega.WeatherBoosts[0] = "changed"
+	again, _ := catalog.Lookup("メガスピアー")
+	if again.WeatherBoosts[0] != "rain" {
+		t.Fatal("caller mutation changed weather metadata")
+	}
+}
+
+func TestParseRejectsMalformedHostLobbyMetadata(t *testing.T) {
+	for name, body := range map[string]string{
+		"rank blank":          `<script>const aryPokemon={"id":{"poke_raid_rank":" "}};</script>`,
+		"rank object":         `<script>const aryPokemon={"id":{"poke_raid_rank":{}}};</script>`,
+		"weather not array":   `<script>const aryPokemon={"id":{"weather":"rain"}};</script>`,
+		"weather blank":       `<script>const aryPokemon={"id":{"weather":[""]}};</script>`,
+		"weather unsafe":      `<script>const aryPokemon={"id":{"weather":["rain\u0007"]}};</script>`,
+		"weather wrong shape": `<script>const aryPokemon={"id":{"weather":[{}]}};</script>`,
+	} {
+		t.Run(name, func(t *testing.T) { assertRejected(t, []byte(body)) })
+	}
+}
+
+func TestParseRejectsMalformedCurrentRaidMetadata(t *testing.T) {
+	pokemon := `const aryPokemon={"25":{"poke_raid_rank":"1","weather":["rain"]}};`
+	for name, raid := range map[string]string{
+		"unknown pokemon":       `const aryPokeRaid={"1":["missing"]};`,
+		"duplicate membership":  `const aryPokeRaid={"1":["25"],"3":["25"]};`,
+		"blank rank":            `const aryPokeRaid={"":["25"]};`,
+		"invalid rank":          `const aryPokeRaid={"one":["25"]};`,
+		"not array":             `const aryPokeRaid={"1":"25"};`,
+		"duplicate declaration": `const aryPokeRaid={"1":["25"]}; const aryPokeRaid={"1":["25"]};`,
+	} {
+		t.Run(name, func(t *testing.T) { assertRejected(t, []byte(`<script>`+pokemon+raid+`</script>`)) })
 	}
 }
 

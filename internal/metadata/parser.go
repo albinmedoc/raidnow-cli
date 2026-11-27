@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -20,12 +21,16 @@ const (
 	MaxIDBytes               = 256
 	MaxNameBytes             = 256
 	MaxImageURLBytes         = 2048
+	MaxWeatherValues         = 16
+	MaxWeatherBytes          = 64
 )
 
 var (
 	ErrInvalidMetadata = errors.New("invalid pokemon metadata")
 	aryPokemonDecl     = regexp.MustCompile(`\b(?:var|let|const)[ 	\r\n]+aryPokemon[ 	\r\n]*=`)
+	aryPokeRaidDecl    = regexp.MustCompile(`\b(?:var|let|const)[ 	\r\n]+aryPokeRaid[ 	\r\n]*=`)
 	readyWrapperPrefix = regexp.MustCompile(`(?s)^[ 	\r\n]*jQuery[ 	\r\n]*\([ 	\r\n]*function[ 	\r\n]*\([ 	\r\n]*\$[ 	\r\n]*\)[ 	\r\n]*\{[ 	\r\n]*$`)
+	readyWrapperStart  = regexp.MustCompile(`(?s)^[ 	\r\n]*jQuery[ 	\r\n]*\([ 	\r\n]*function[ 	\r\n]*\([ 	\r\n]*\$[ 	\r\n]*\)[ 	\r\n]*\{`)
 )
 
 // Parse extracts exactly one server-rendered aryPokemon JSON object.
@@ -44,15 +49,20 @@ func Parse(body []byte) (catalog Catalog, err error) {
 		return Catalog{}, ErrInvalidMetadata
 	}
 
-	var candidates [][]byte
+	var candidates, raidCandidates [][]byte
 	for _, source := range sources {
 		objects, scanErr := aryPokemonObjects(source)
 		if scanErr != nil {
 			return Catalog{}, ErrInvalidMetadata
 		}
 		candidates = append(candidates, objects...)
+		raidObjects, raidScanErr := declaredObjects(source, aryPokeRaidDecl)
+		if raidScanErr != nil {
+			return Catalog{}, ErrInvalidMetadata
+		}
+		raidCandidates = append(raidCandidates, raidObjects...)
 	}
-	if len(candidates) != 1 {
+	if len(candidates) != 1 || len(raidCandidates) > 1 {
 		return Catalog{}, ErrInvalidMetadata
 	}
 
@@ -75,6 +85,8 @@ func Parse(body []byte) (catalog Catalog, err error) {
 			Shiny    json.RawMessage `json:"shiny"`
 			MaxCP20  json.RawMessage `json:"maxcp20"`
 			MaxCP25  json.RawMessage `json:"maxcp25"`
+			RaidRank json.RawMessage `json:"poke_raid_rank"`
+			Weather  json.RawMessage `json:"weather"`
 		}
 		if json.Unmarshal(value, &fields) != nil || len(fields.NameEN) > MaxNameBytes || len(fields.ImageURL) > MaxImageURLBytes || !safeText(fields.NameEN) || !safeText(fields.ImageURL) {
 			return Catalog{}, ErrInvalidMetadata
@@ -82,16 +94,26 @@ func Parse(body []byte) (catalog Catalog, err error) {
 		shinyAvailable, shinyErr := parseShiny(fields.Shiny)
 		maxCP20, maxCP20Err := parseEncounterCP(fields.MaxCP20)
 		maxCP25, maxCP25Err := parseEncounterCP(fields.MaxCP25)
-		if shinyErr != nil || maxCP20Err != nil || maxCP25Err != nil {
+		raidRank, rankErr := parseOptionalMetadataScalar(fields.RaidRank)
+		weatherBoosts, weatherErr := parseWeatherBoosts(fields.Weather)
+		if shinyErr != nil || maxCP20Err != nil || maxCP25Err != nil || rankErr != nil || weatherErr != nil {
 			return Catalog{}, ErrInvalidMetadata
 		}
 		entries[id] = Entry{
-			ID:             id,
-			NameEN:         fields.NameEN,
-			ImageURL:       fields.ImageURL,
-			ShinyAvailable: shinyAvailable,
-			MaxCP20:        maxCP20,
-			MaxCP25:        maxCP25,
+			ID:               id,
+			NameEN:           fields.NameEN,
+			ImageURL:         fields.ImageURL,
+			ShinyAvailable:   shinyAvailable,
+			MaxCP20:          maxCP20,
+			MaxCP25:          maxCP25,
+			RaidRank:         raidRank,
+			WeatherBoosts:    weatherBoosts,
+			HasWeatherBoosts: len(fields.Weather) > 0,
+		}
+	}
+	if len(raidCandidates) == 1 {
+		if err := applyCurrentRaids(entries, raidCandidates[0]); err != nil {
+			return Catalog{}, ErrInvalidMetadata
 		}
 	}
 	return Catalog{entries: entries}, nil
@@ -185,15 +207,109 @@ func parseEncounterCP(raw json.RawMessage) (*int, error) {
 	return nil, ErrInvalidMetadata
 }
 
+func parseOptionalMetadataScalar(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if decoder.Decode(&value) != nil {
+		return "", ErrInvalidMetadata
+	}
+	var text string
+	switch typed := value.(type) {
+	case string:
+		text = typed
+	case json.Number:
+		if _, err := typed.Int64(); err != nil {
+			return "", ErrInvalidMetadata
+		}
+		text = typed.String()
+	default:
+		return "", ErrInvalidMetadata
+	}
+	if text == "" || text != strings.TrimSpace(text) || !safeText(text) || len(text) > MaxNameBytes {
+		return "", ErrInvalidMetadata
+	}
+	return text, nil
+}
+
+func parseWeatherBoosts(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var values []string
+	if json.Unmarshal(raw, &values) != nil || values == nil || len(values) > MaxWeatherValues {
+		return nil, ErrInvalidMetadata
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || value != strings.TrimSpace(value) || len(value) > MaxWeatherBytes || !safeText(value) {
+			return nil, ErrInvalidMetadata
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return nil, ErrInvalidMetadata
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
+func applyCurrentRaids(entries map[string]Entry, source []byte) error {
+	var ranks map[string]json.RawMessage
+	if !hasUniqueJSONKeys(source) || json.Unmarshal(source, &ranks) != nil || len(ranks) == 0 || len(ranks) > MaxEntries {
+		return ErrInvalidMetadata
+	}
+	total := 0
+	seen := make(map[string]struct{})
+	for rank, rawIDs := range ranks {
+		value, err := strconv.Atoi(rank)
+		if err != nil || value <= 0 || strconv.Itoa(value) != rank {
+			return ErrInvalidMetadata
+		}
+		var ids []string
+		if json.Unmarshal(rawIDs, &ids) != nil || ids == nil {
+			return ErrInvalidMetadata
+		}
+		total += len(ids)
+		if total > MaxEntries {
+			return ErrInvalidMetadata
+		}
+		for _, id := range ids {
+			if id == "" || len(id) > MaxIDBytes || id != strings.TrimSpace(id) || !safeText(id) {
+				return ErrInvalidMetadata
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return ErrInvalidMetadata
+			}
+			entry, ok := entries[id]
+			if !ok || entry.RaidRank == "" || entry.RaidRank != rank {
+				return ErrInvalidMetadata
+			}
+			seen[id] = struct{}{}
+			entry.CurrentRaidRank = rank
+			entries[id] = entry
+		}
+	}
+	return nil
+}
+
 func aryPokemonObjects(source []byte) ([][]byte, error) {
+	return declaredObjects(source, aryPokemonDecl)
+}
+
+func declaredObjects(source []byte, declaration *regexp.Regexp) ([][]byte, error) {
 	if len(source) > MaxExecutableScriptBytes {
 		return nil, ErrInvalidMetadata
 	}
-	matches := aryPokemonDecl.FindAllIndex(source, -1)
+	matches := declaration.FindAllIndex(source, -1)
 	objects := make([][]byte, 0, len(matches))
 	for _, match := range matches {
 		_, topLevel, prefixOK := maskJavaScript(source[:match[1]])
-		if (!prefixOK || !topLevel[match[0]]) && !readyWrapperPrefix.Match(source[:match[0]]) {
+		if (!prefixOK || !topLevel[match[0]]) && !readyWrapperPrefix.Match(source[:match[0]]) && !atReadyWrapperBodyTopLevel(source[:match[0]]) {
 			continue
 		}
 		start := skipJSONSpace(source, match[1])
@@ -211,6 +327,16 @@ func aryPokemonObjects(source []byte) ([][]byte, error) {
 		objects = append(objects, source[start:end])
 	}
 	return objects, nil
+}
+
+func atReadyWrapperBodyTopLevel(prefix []byte) bool {
+	opening := readyWrapperStart.FindIndex(prefix)
+	if opening == nil {
+		return false
+	}
+	body := prefix[opening[1]:]
+	_, topLevel, ok := maskJavaScript(body)
+	return ok && topLevel[len(body)]
 }
 
 func maskJavaScript(source []byte) ([]byte, []bool, bool) {
