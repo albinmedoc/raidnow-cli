@@ -58,12 +58,15 @@ func (client *Client) postForm(ctx context.Context, operation OperationDescripto
 		return nil, transportFailure(operation.Kind(), dispatched.Load())
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
-		if operation.AllowsEmptyResponse() && response.StatusCode == http.StatusOK {
+		if operation.AllowsEmptyResponse() && (response.StatusCode == http.StatusOK || operation.allowsEmptyAny2xxResponse()) {
 			return json.RawMessage{}, nil
 		}
 		return nil, upstreamRejection()
 	}
 	if !json.Valid(body) {
+		if operation.allowsOpaqueResponse() {
+			return json.RawMessage(bytes.Clone(body)), nil
+		}
 		return nil, upstreamRejection()
 	}
 	return json.RawMessage(bytes.Clone(body)), nil

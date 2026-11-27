@@ -41,6 +41,16 @@ go build -o raidnow ./cmd/raidnow
 ./raidnow --token-file ./raidnow.token lobbies list --page 1 --rank 0
 ./raidnow --token-file ./raidnow.token --json lobbies list \
   --min-host-rating 3 --include-metadata=false
+./raidnow --token-file ./raidnow.token host create \
+  --start-date "2026/11/27 16:23:35" --pokemon 'ピカチュウ(太陽の冠)' \
+  --trainer-name Babbssan --trainer-level 59 --trainer-country world \
+  --trainer-code-file ./trainer-code --span 45 --current-weather cloudy \
+  --max-users 4 --gym-color mystic --pass-type remote \
+  --guest-level 5 --guest-rating all --hot
+./raidnow --token-file ./raidnow.token host status --raid-id RAID_ID
+./raidnow --token-file ./raidnow.token host kick --raid-id RAID_ID --guest-id GUEST_ID
+./raidnow --token-file ./raidnow.token host start --raid-id RAID_ID
+./raidnow --token-file ./raidnow.token host close --raid-id RAID_ID
 ./raidnow --token-file ./raidnow.token raid join --raid-id RAID_ID \
   --trainer-name Ash123 --trainer-level 50 --trainer-country se
 ./raidnow --token-file ./raidnow.token raid get --raid-id RAID_ID
@@ -66,7 +76,7 @@ Run this in a user-owned, non-world-writable directory. On supported Bash/POSIX 
 
 When reading `--token-file`, the CLI requires a regular file, reads a bounded value and never modifies the file. Symbolic links, directories and other non-regular paths are rejected. `trainer publish` consumes the token from `--token-file`; `token get` ignores `--token-file` because it fetches a new token. Human `token get` output is exactly the token plus a newline. JSON output deliberately contains the secret too, marks `status` as `secret`, sets `containsSecret: true`, and includes a handling warning. The CLI stores no token, cookies, CSRF state, account, profile, or workflow state.
 
-The form transport is stateless: callers provide the token on each request. Mutating commands are never retried automatically because a broken connection after dispatch can leave the write outcome unknown. Queue cancellation and raid leaving perform one read-back verification after an acknowledged write. `queue cancel --verify=false` and `raid leave --verify=false` send only the primitive write request; Raid NOW Lite uses these forms and owns later checks and reconciliation. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
+The form transport is stateless: callers provide the token on each request. Mutating commands are never retried automatically because a broken connection after dispatch can leave the write outcome unknown. Queue cancellation and raid leaving perform one read-back verification after an acknowledged write. `queue cancel --verify=false` and `raid leave --verify=false` send only the primitive write request; Raid NOW Lite uses these forms and owns later checks and reconciliation. Host creation, start, kick, and close are also single-write primitives with no automatic retry. `host create` fetches the current Raid NOW Pokémon catalog before reading secrets, derives `rank` and `weather_boost[]` from the exact `--pokemon` entry, and uses named options instead of raw wire enums: `--gym-color neutral|valor|mystic|instinct`, `--pass-type remote|local`, `--current-weather unknown|sunny|clear-night|partly-cloudy|partly-cloudy-night|cloudy|rain|snow|windy|fog`, `--guest-level 5|40|50|60|70`, and `--guest-rating all|0|1|2|3|4|5`. Use `--weather-boosted` when the actual raid boss is weather boosted. A remote host cannot use `--max-users 10`, matching the web client. `host status` performs the read-only `child_list` request and exposes guest IDs needed by `host kick`. `--request-timeout <duration>` overrides an operation's default timeout; zero retains the registered default.
 
 `queue wait` only polls an existing Auto Join queue and never cancels it on timeout or interruption. `search` creates the queue once, waits in the foreground, and makes one best-effort cancel-and-check cleanup attempt after timeout or interruption. A successful match is the Auto Join result; inspect it with `raid status` when needed.
 

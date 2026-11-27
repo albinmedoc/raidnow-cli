@@ -26,7 +26,9 @@ type primitiveCall struct {
 	identity  domain.TrainerIdentity
 	selection upstream.QueueSelection
 	query     upstream.LobbyQuery
+	hostInput upstream.HostLobbyInput
 	pokemon   []string
+	guestID   string
 	options   upstream.CallOptions
 }
 
@@ -120,6 +122,25 @@ func (stub *stubRaidOperations) ReadyRaid(_ context.Context, token, raidID strin
 	stub.calls = append(stub.calls, primitiveCall{name: "ready", token: token, raidID: raidID, options: options})
 	return stub.err
 }
+func (stub *stubRaidOperations) CreateHostedRaid(_ context.Context, token string, trainer domain.Trainer, input upstream.HostLobbyInput, options upstream.CallOptions) (domain.Raid, error) {
+	stub.calls = append(stub.calls, primitiveCall{name: "host-create", token: token, trainer: trainer, hostInput: input, options: options})
+	if stub.found != nil {
+		return *stub.found, stub.err
+	}
+	return domain.Raid{}, stub.err
+}
+func (stub *stubRaidOperations) CloseHostedRaid(_ context.Context, token, raidID string, options upstream.CallOptions) error {
+	stub.calls = append(stub.calls, primitiveCall{name: "host-close", token: token, raidID: raidID, options: options})
+	return stub.err
+}
+func (stub *stubRaidOperations) StartHostedRaid(_ context.Context, token, raidID string, options upstream.CallOptions) error {
+	stub.calls = append(stub.calls, primitiveCall{name: "host-start", token: token, raidID: raidID, options: options})
+	return stub.err
+}
+func (stub *stubRaidOperations) KickHostedGuest(_ context.Context, token, raidID, guestID string, options upstream.CallOptions) error {
+	stub.calls = append(stub.calls, primitiveCall{name: "host-kick", token: token, raidID: raidID, guestID: guestID, options: options})
+	return stub.err
+}
 
 func runPrimitiveCommand(t *testing.T, operations RaidOperations, input string, args ...string) (string, error) {
 	return runPrimitiveCommandWithMetadata(t, operations, &stubMetadataFetcher{catalog: testCatalog(t)}, input, args...)
@@ -142,7 +163,7 @@ func (stub *stubMetadataFetcher) Catalog(context.Context) (metadata.Catalog, err
 
 func testCatalog(t *testing.T) metadata.Catalog {
 	t.Helper()
-	catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"150":{"en":"Armored Mewtwo"},"6_x":{"en":"Mega Charizard X"},"25":{"en":"Pikachu"}};</script>`))
+	catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"150":{"en":"Armored Mewtwo","poke_raid_rank":"5","weather":["windy"]},"6_x":{"en":"Mega Charizard X","poke_raid_rank":"4","weather":["sunny","windy"]},"25":{"en":"Pikachu","poke_raid_rank":"1","weather":["rain"]},"ピカチュウ(太陽の冠)":{"en":"Pikachu sun crown","poke_raid_rank":"1","weather":["rain"]}}; const aryPokeRaid={"1":["25","ピカチュウ(太陽の冠)"],"4":["6_x"],"5":["150"]};</script>`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,6 +474,165 @@ func TestLobbiesListAcceptsEmptyJSONList(t *testing.T) {
 	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"lobbies list\",\"status\":\"listed\",\"data\":[],\"warnings\":[]}\n"
 	if stdout != want {
 		t.Fatalf("stdout=%q want=%q", stdout, want)
+	}
+}
+
+func TestHostCreateExposesSemanticOptionsOnly(t *testing.T) {
+	root := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: &stubRaidOperations{}, Metadata: &stubMetadataFetcher{catalog: testCatalog(t)}, TokenFile: "-", RequestTimeout: time.Second})
+	command, _, err := root.Find([]string{"host", "create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"regional-raid", "rank", "color", "weather", "guest-party-color", "guest-score", "weather-boost", "exclude-pokemon", "possible"} {
+		if flag := command.Flags().Lookup(name); flag != nil {
+			t.Fatalf("unsupported raw flag exposed: %s", flag.Name)
+		}
+	}
+	for _, name := range []string{"pokemon", "current-weather", "gym-color", "pass-type", "weather-boosted", "guest-level", "guest-rating"} {
+		if flag := command.Flags().Lookup(name); flag == nil {
+			t.Fatalf("semantic flag missing: %s", name)
+		}
+	}
+}
+
+func TestHostCreateDerivesCatalogFieldsAndMapsSemanticOptions(t *testing.T) {
+	operations := &stubRaidOperations{found: &domain.Raid{ID: "44544920"}}
+	fetcher := &stubMetadataFetcher{catalog: testCatalog(t)}
+	stdout, err := runPrimitiveCommandWithMetadata(t, operations, fetcher, "opaque-token\n", "--json", "host", "create",
+		"--start-date", "2026/11/27 16:23:35", "--pokemon", "ピカチュウ(太陽の冠)",
+		"--trainer-name", "Babbssan", "--trainer-level", "59", "--trainer-country", "world",
+		"--trainer-code-file", protectedTrainerCodeFile(t, "172056762594"), "--span", "45", "--current-weather", "cloudy",
+		"--gym-color", "mystic", "--pass-type", "remote", "--guest-level", "5",
+		"--guest-rating", "0", "--hot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"schemaVersion\":1,\"ok\":true,\"command\":\"host create\",\"status\":\"created\",\"data\":{\"created\":true,\"raidId\":\"44544920\"},\"warnings\":[]}\n"
+	if stdout != want || len(operations.calls) != 1 || fetcher.calls != 1 {
+		t.Fatalf("stdout=%q calls=%#v metadata=%d", stdout, operations.calls, fetcher.calls)
+	}
+	call := operations.calls[0]
+	if call.name != "host-create" || call.token != "opaque-token" || call.trainer.CodeFormValue() != "172056762594" || call.options.Timeout != 3*time.Second {
+		t.Fatalf("call=%+v", call)
+	}
+	input := call.hostInput
+	if input.StartDate != "2026/11/27 16:23:35" || input.Rank != "1" || input.PokemonID != "ピカチュウ(太陽の冠)" || input.Span != 45 || input.CurrentWeather != 5 || input.MaxUsers != 5 || input.GymColor != 2 || input.PassType != 0 || input.GuestLevel != 0 || input.GuestScore != -1 || !input.Hot || !reflect.DeepEqual(input.WeatherBoosts, []string{"rain"}) {
+		t.Fatalf("host input=%+v", input)
+	}
+}
+
+func TestHostSemanticMappingsMatchRaidNowWireValues(t *testing.T) {
+	weather := map[string]int{"unknown": 0, "sunny": 1, "clear-night": 2, "partly-cloudy": 3, "partly-cloudy-night": 4, "cloudy": 5, "rain": 6, "snow": 7, "windy": 8, "fog": 9}
+	for name, want := range weather {
+		if got, ok := hostCurrentWeather(name); !ok || got != want {
+			t.Fatalf("weather %q=(%d,%t), want (%d,true)", name, got, ok, want)
+		}
+	}
+	gym := map[string]int{"neutral": 0, "valor": 1, "mystic": 2, "instinct": 3}
+	for name, want := range gym {
+		if got, ok := hostGymColor(name); !ok || got != want {
+			t.Fatalf("gym %q=(%d,%t), want (%d,true)", name, got, ok, want)
+		}
+	}
+	passes := map[string]int{"remote": 0, "local": 1}
+	for name, want := range passes {
+		if got, ok := hostPassType(name); !ok || got != want {
+			t.Fatalf("pass %q=(%d,%t), want (%d,true)", name, got, ok, want)
+		}
+	}
+	levels := map[int]int{5: 0, 40: 40, 50: 50, 60: 60, 70: 70}
+	for name, want := range levels {
+		if got, ok := hostGuestLevel(name); !ok || got != want {
+			t.Fatalf("level %d=(%d,%t), want (%d,true)", name, got, ok, want)
+		}
+	}
+	ratings := map[string]int{"all": 0, "0": -1, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5}
+	for name, want := range ratings {
+		if got, ok := hostGuestRating(name); !ok || got != want {
+			t.Fatalf("rating %q=(%d,%t), want (%d,true)", name, got, ok, want)
+		}
+	}
+}
+
+func TestHostCreateRejectsInvalidSemanticOptionsBeforeMetadataOrSecrets(t *testing.T) {
+	for _, args := range [][]string{
+		{"--current-weather", "storm"},
+		{"--gym-color", "purple"},
+		{"--pass-type", "teleport"},
+		{"--guest-level", "41"},
+		{"--guest-rating", "6"},
+		{"--pass-type", "remote", "--max-users", "10"},
+	} {
+		operations := &stubRaidOperations{}
+		fetcher := &stubMetadataFetcher{panic: true}
+		command := NewRootCommandWithOptions(RootOptions{Bootstrap: &stubTokenBootstrapper{}, Publisher: &stubTrainerPublisher{}, Operations: operations, Metadata: fetcher, TokenFile: "-", RequestTimeout: time.Second})
+		command.SetIn(panicReader{})
+		command.SetOut(&bytes.Buffer{})
+		command.SetErr(&bytes.Buffer{})
+		base := []string{"host", "create", "--start-date", "2026/11/27 16:23:35", "--pokemon", "25", "--trainer-name", "Ash123", "--trainer-level", "50", "--trainer-country", "se", "--trainer-code-file", protectedTrainerCodeFile(t, "123456789012")}
+		command.SetArgs(append(base, args...))
+		err := command.Execute()
+		if output.ExitCodeFor(err) != output.ExitInvalidArguments || len(operations.calls) != 0 || fetcher.calls != 0 {
+			t.Fatalf("args=%v exit=%d calls=%#v metadata=%d err=%v", args, output.ExitCodeFor(err), operations.calls, fetcher.calls, err)
+		}
+	}
+}
+
+func TestHostCreateReturnsMetadataUnavailableForMissingOrUnavailablePokemon(t *testing.T) {
+	for _, pokemon := range []string{"missing", "rankless", "stale", "no-weather"} {
+		catalog, err := metadata.Parse([]byte(`<script>const aryPokemon={"rankless":{"en":"Rankless"},"stale":{"en":"Stale","poke_raid_rank":"1","weather":["rain"]},"no-weather":{"en":"No weather","poke_raid_rank":"1"}}; const aryPokeRaid={"1":["no-weather"]};</script>`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		operations := &stubRaidOperations{}
+		fetcher := &stubMetadataFetcher{catalog: catalog}
+		stdout, err := runPrimitiveCommandWithMetadata(t, operations, fetcher, "token\n", "host", "create", "--start-date", "2026/11/27 16:23:35", "--pokemon", pokemon, "--trainer-name", "Ash123", "--trainer-level", "50", "--trainer-country", "se", "--trainer-code-file", protectedTrainerCodeFile(t, "123456789012"))
+		if output.ExitCodeFor(err) != output.ExitMetadataUnavailable || stdout != "" || len(operations.calls) != 0 || fetcher.calls != 1 {
+			t.Fatalf("pokemon=%s exit=%d stdout=%q calls=%#v metadata=%d err=%v", pokemon, output.ExitCodeFor(err), stdout, operations.calls, fetcher.calls, err)
+		}
+	}
+}
+
+func TestHostStatusUsesChildListAndRendersPlayers(t *testing.T) {
+	players := domain.RaidPlayers{Players: []domain.RaidPlayer{{ID: "176894134", TrainerName: "Guest7", Level: 50}}, Count: 1}
+	operations := &stubRaidOperations{players: players}
+	stdout, err := runPrimitiveCommand(t, operations, "token\n", "--json", "host", "status", "--raid-id", "44544920")
+	if err != nil || !strings.Contains(stdout, `"command":"host status"`) || !strings.Contains(stdout, `"id":"176894134"`) {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+	if len(operations.calls) != 1 || operations.calls[0].name != "players" || operations.calls[0].raidID != "44544920" {
+		t.Fatalf("calls=%#v", operations.calls)
+	}
+
+	operations = &stubRaidOperations{players: players}
+	stdout, err = runPrimitiveCommand(t, operations, "token\n", "host", "status", "--raid-id", "44544920")
+	if err != nil || stdout != "players=1 ready=0 deleted=false\nguest-id=176894134 Guest7 level=50 country= rating=none ready=false\n" {
+		t.Fatalf("human stdout=%q err=%v", stdout, err)
+	}
+}
+
+func TestHostLifecycleCommandsCallExactPrimitiveOnce(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		call string
+		want string
+	}{
+		{name: "close", args: []string{"host", "close", "--raid-id", "44544920"}, call: "host-close", want: "Lobbyn stängdes.\n"},
+		{name: "start", args: []string{"host", "start", "--raid-id", "44544920"}, call: "host-start", want: "Raidstart markerad.\n"},
+		{name: "kick", args: []string{"host", "kick", "--raid-id", "44544920", "--guest-id", "176894134"}, call: "host-kick", want: "Gästen kickades.\n"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			operations := &stubRaidOperations{}
+			stdout, err := runPrimitiveCommand(t, operations, "token\n", testCase.args...)
+			if err != nil || stdout != testCase.want || len(operations.calls) != 1 || operations.calls[0].name != testCase.call {
+				t.Fatalf("stdout=%q err=%v calls=%#v", stdout, err, operations.calls)
+			}
+			if testCase.name == "kick" && operations.calls[0].guestID != "176894134" {
+				t.Fatalf("call=%+v", operations.calls[0])
+			}
+		})
 	}
 }
 

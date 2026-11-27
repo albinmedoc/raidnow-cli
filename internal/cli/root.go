@@ -97,6 +97,7 @@ func NewRootCommandWithOptions(options RootOptions) *cobra.Command {
 	command.AddCommand(newSearchCommand(options.Operations, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newBossesCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newLobbiesCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
+	command.AddCommand(newHostCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newRaidCommand(options.Operations, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newHistoryCommand(options.Profiles, options.Metadata, &tokenFile, &requestTimeout, &jsonOutput))
 	command.AddCommand(newBlocksCommand(options.Profiles, &tokenFile, &requestTimeout, &jsonOutput))

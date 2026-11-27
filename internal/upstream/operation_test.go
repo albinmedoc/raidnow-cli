@@ -39,6 +39,10 @@ func TestKnownOperationsBindImmutableMetadata(t *testing.T) {
 		{ChildPostFast, "child_post_fast", WriteOperation, 15 * time.Second, false},
 		{GuestRaidDelPost, "guest_raid_del_post", WriteOperation, 15 * time.Second, false},
 		{GuestReadyPost, "guest_ready_post", WriteOperation, 15 * time.Second, false},
+		{ParPost, "par_post", WriteOperation, 15 * time.Second, false},
+		{ParDelete, "par_delete", WriteOperation, 15 * time.Second, true},
+		{HostReadyPost, "host_ready_post", WriteOperation, 15 * time.Second, false},
+		{HostKicksGuestPost, "host_kicks_guest_post", WriteOperation, 15 * time.Second, false},
 	}
 
 	for _, testCase := range testCases {

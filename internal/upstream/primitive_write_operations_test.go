@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,13 @@ func TestPrimitiveWritesPostExactForms(t *testing.T) {
 	trainer, _ := domain.NewTrainer("Ash123", "123456789012", 50, "se")
 	identity, _ := domain.NewTrainerIdentity("Misty7", 44, "JP")
 	selection := QueueSelection{Ranks: []string{"5", "mega"}, PokemonIDs: []string{"150", "6_mega_x"}, GuestEvalStar: "4", MinimumHostRating: 3}
+	hostLobby := HostLobbyInput{
+		StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "ピカチュウ(太陽の冠)", Span: 45,
+		Color: 0, Weather: 0, CurrentWeather: 5, MaxUsers: 4, GymColor: 2, PassType: 0,
+		Private: false, Filters: []string{"シャドウマクノシタ", "ヒトモシ"}, Possible: false,
+		GuestLevel: 0, GuestScore: 0, InvitationOnly: false, Hot: true, MegaPokemonEntry: false,
+		WeatherBoosts: []string{"rain"},
+	}
 	tests := []struct {
 		name string
 		want url.Values
@@ -59,6 +67,45 @@ func TestPrimitiveWritesPostExactForms(t *testing.T) {
 				return client.ReadyRaid(context.Background(), "opaque-token", "raid-9", CallOptions{})
 			},
 		},
+		{
+			name: "create hosted raid",
+			want: url.Values{
+				"type": {"par_post"}, "start_date": {"2026/11/27 16:23:35"}, "rank": {"1"}, "pokemon": {"ピカチュウ(太陽の冠)"},
+				"span": {"45"}, "code": {"123456789012"}, "level": {"50"}, "color": {"0"}, "tid": {"Ash123"},
+				"weather": {"0"}, "current_weather": {"5"}, "maxuser": {"4"}, "gpcolor": {"2"}, "passtype": {"0"},
+				"private": {"0"}, "filter[]": {"シャドウマクノシタ", "ヒトモシ"}, "possible": {"false"}, "lang": {"1"},
+				"country_code": {"se"}, "glevel": {"0"}, "gescore": {"0"}, "invitation_only": {"0"}, "hot": {"1"},
+				"mega_pokemon_entry": {"0"}, "weather_boost[]": {"rain"}, "regional_raid": {"0"}, "token": {"opaque-token"},
+			},
+			call: func(client *Client) error {
+				created, err := client.CreateHostedRaid(context.Background(), "opaque-token", trainer, hostLobby, CallOptions{})
+				if err == nil && created.ID != "raid-9" {
+					return fmt.Errorf("created raid ID=%q", created.ID)
+				}
+				return err
+			},
+		},
+		{
+			name: "close hosted raid",
+			want: url.Values{"type": {"par_delete"}, "parid": {"raid-9"}, "token": {"opaque-token"}},
+			call: func(client *Client) error {
+				return client.CloseHostedRaid(context.Background(), "opaque-token", "raid-9", CallOptions{})
+			},
+		},
+		{
+			name: "start hosted raid",
+			want: url.Values{"type": {"host_ready_post"}, "edit": {"raid-9"}, "lang": {"1"}, "token": {"opaque-token"}},
+			call: func(client *Client) error {
+				return client.StartHostedRaid(context.Background(), "opaque-token", "raid-9", CallOptions{})
+			},
+		},
+		{
+			name: "kick hosted guest",
+			want: url.Values{"type": {"host_kicks_guest_post"}, "edit": {"raid-9"}, "kick": {"guest-7"}, "lang": {"1"}, "token": {"opaque-token"}},
+			call: func(client *Client) error {
+				return client.KickHostedGuest(context.Background(), "opaque-token", "raid-9", "guest-7", CallOptions{})
+			},
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -66,6 +113,10 @@ func TestPrimitiveWritesPostExactForms(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 				_ = request.ParseForm()
 				got = request.PostForm
+				if testCase.name == "create hosted raid" {
+					_, _ = response.Write([]byte(`{"status":"success","list":[{"rpl_id":"raid-1"},{"rpl_id":"raid-9"}],"now":1}`))
+					return
+				}
 				_, _ = response.Write([]byte(`{"status":"success"}`))
 			}))
 			defer server.Close()
@@ -138,6 +189,59 @@ func TestCreateMatchingPostsExplicitFilterEdgesInOrder(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("form=%#v want=%#v", got, want)
+			}
+		})
+	}
+}
+
+func TestHostedRaidCloseAcceptsSuccessfulEmptyOrTextResponse(t *testing.T) {
+	for _, testCase := range []struct {
+		status int
+		body   string
+	}{
+		{status: http.StatusOK, body: ""},
+		{status: http.StatusOK, body: "deleted"},
+		{status: http.StatusNoContent, body: ""},
+	} {
+		t.Run(fmt.Sprintf("status=%d/body=%q", testCase.status, testCase.body), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.WriteHeader(testCase.status)
+				_, _ = response.Write([]byte(testCase.body))
+			}))
+			defer server.Close()
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+			if err := client.CloseHostedRaid(context.Background(), "opaque-token", "raid-9", CallOptions{}); err != nil {
+				t.Fatalf("close hosted raid: %v", err)
+			}
+		})
+	}
+}
+
+func TestHostedRaidCreateRequiresExplicitSuccessAndPreservesSafeRejection(t *testing.T) {
+	trainer, _ := domain.NewTrainer("Ash123", "123456789012", 50, "se")
+	input := HostLobbyInput{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5}
+	for _, testCase := range []struct {
+		name string
+		body string
+		text string
+	}{
+		{name: "missing status", body: `{"list":[{"rpl_id":"raid-9"}],"now":0}`},
+		{name: "rejection detail", body: `{"status":"error","text":"Invalid lobby for opaque-token and 123456789012."}`, text: "Invalid lobby"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(testCase.body))
+			}))
+			defer server.Close()
+			client := mustClient(t, Config{Endpoint: server.URL, HTTPClient: server.Client(), AllowInsecureHTTP: true})
+			_, err := client.CreateHostedRaid(context.Background(), "opaque-token", trainer, input, CallOptions{})
+			assertExitCode(t, err, output.ExitUpstreamRejection)
+			message := err.Error()
+			if testCase.text != "" && !strings.Contains(message, testCase.text) {
+				t.Fatalf("error=%q missing %q", message, testCase.text)
+			}
+			if strings.Contains(message, "opaque-token") || strings.Contains(message, "123456789012") {
+				t.Fatalf("error exposed credentials: %q", message)
 			}
 		})
 	}
@@ -225,6 +329,13 @@ func TestPrimitiveWritesRejectInvalidInputsBeforeNetwork(t *testing.T) {
 		client.LeaveRaid(context.Background(), "token", "raid", CallOptions{Timeout: -time.Second}),
 		client.ReadyRaid(context.Background(), "token", "\n", CallOptions{}),
 		client.ReadyRaid(context.Background(), "token", "raid", CallOptions{Timeout: -time.Second}),
+		func() error {
+			_, err := client.CreateHostedRaid(context.Background(), "token", trainer, HostLobbyInput{}, CallOptions{})
+			return err
+		}(),
+		client.CloseHostedRaid(context.Background(), "token", "\n", CallOptions{}),
+		client.StartHostedRaid(context.Background(), "token", "\n", CallOptions{}),
+		client.KickHostedGuest(context.Background(), "token", "raid", "\n", CallOptions{}),
 	}
 	for _, selection := range []QueueSelection{
 		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, MinimumHostRating: -2},
@@ -236,6 +347,18 @@ func TestPrimitiveWritesRejectInvalidInputsBeforeNetwork(t *testing.T) {
 		{Ranks: []string{"5"}, PokemonIDs: []string{"150"}, HostLevel: 41},
 	} {
 		checks = append(checks, client.CreateMatching(context.Background(), "token", trainer, selection, CallOptions{}))
+	}
+	for _, input := range []HostLobbyInput{
+		{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5, CurrentWeather: 10},
+		{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5, GymColor: 4},
+		{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5, PassType: 2},
+		{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5, GuestLevel: 41},
+		{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5, GuestScore: -2},
+		{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5, GuestScore: 6},
+		{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 10, PassType: 0},
+	} {
+		_, err := client.CreateHostedRaid(context.Background(), "token", trainer, input, CallOptions{})
+		checks = append(checks, err)
 	}
 	for _, err := range checks {
 		assertExitCode(t, err, output.ExitInvalidArguments)
@@ -266,6 +389,19 @@ func TestPrimitiveWritesDoNotRetryAndClassifyDispatchedFailureAsUncertain(t *tes
 		}},
 		{name: "ready", call: func(client *Client) error {
 			return client.ReadyRaid(context.Background(), "token", "raid", CallOptions{Timeout: 10 * time.Millisecond})
+		}},
+		{name: "host create", call: func(client *Client) error {
+			_, err := client.CreateHostedRaid(context.Background(), "token", trainer, HostLobbyInput{StartDate: "2026/11/27 16:23:35", Rank: "1", PokemonID: "25", Span: 45, MaxUsers: 5}, CallOptions{Timeout: 10 * time.Millisecond})
+			return err
+		}},
+		{name: "host close", call: func(client *Client) error {
+			return client.CloseHostedRaid(context.Background(), "token", "raid", CallOptions{Timeout: 10 * time.Millisecond})
+		}},
+		{name: "host start", call: func(client *Client) error {
+			return client.StartHostedRaid(context.Background(), "token", "raid", CallOptions{Timeout: 10 * time.Millisecond})
+		}},
+		{name: "host kick", call: func(client *Client) error {
+			return client.KickHostedGuest(context.Background(), "token", "raid", "guest", CallOptions{Timeout: 10 * time.Millisecond})
 		}},
 	}
 	for _, testCase := range tests {

@@ -39,6 +39,29 @@ type QueueSelection struct {
 	HostLevel         int
 }
 
+// HostLobbyInput contains the invocation-scoped settings for one hosted lobby.
+type HostLobbyInput struct {
+	StartDate        string
+	Rank             string
+	PokemonID        string
+	Span             int
+	Color            int
+	Weather          int
+	CurrentWeather   int
+	MaxUsers         int
+	GymColor         int
+	PassType         int
+	Private          bool
+	Filters          []string
+	Possible         bool
+	GuestLevel       int
+	GuestScore       int
+	InvitationOnly   bool
+	Hot              bool
+	MegaPokemonEntry bool
+	WeatherBoosts    []string
+}
+
 // ListCurrentRaidBosses returns the current read-only Auto Join catalog.
 func (client *Client) ListCurrentRaidBosses(ctx context.Context, token string, options CallOptions) ([]domain.RaidBoss, error) {
 	if !session.AnonymousTokenIsValid(token) {

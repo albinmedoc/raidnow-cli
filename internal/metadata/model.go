@@ -4,12 +4,16 @@ import "sort"
 
 // Entry is a Pokémon metadata value.
 type Entry struct {
-	ID             string
-	NameEN         string
-	ImageURL       string
-	ShinyAvailable bool
-	MaxCP20        *int
-	MaxCP25        *int
+	ID               string
+	NameEN           string
+	ImageURL         string
+	ShinyAvailable   bool
+	MaxCP20          *int
+	MaxCP25          *int
+	RaidRank         string
+	CurrentRaidRank  string
+	WeatherBoosts    []string
+	HasWeatherBoosts bool
 }
 
 // Catalog is a collection keyed by exact upstream Pokémon/form ID.
@@ -43,5 +47,6 @@ func cloneEntry(entry Entry) Entry {
 		value := *entry.MaxCP25
 		clone.MaxCP25 = &value
 	}
+	clone.WeatherBoosts = append([]string(nil), entry.WeatherBoosts...)
 	return clone
 }

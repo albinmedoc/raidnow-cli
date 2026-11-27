@@ -21,6 +21,10 @@ const (
 	ChildPostFast
 	GuestRaidDelPost
 	GuestReadyPost
+	ParPost
+	ParDelete
+	HostReadyPost
+	HostKicksGuestPost
 	CookieGet
 	MyListGet
 	JoinListGet
@@ -32,16 +36,22 @@ const (
 // OperationDescriptor is an immutable view of centrally registered operation
 // metadata.
 type OperationDescriptor struct {
-	name       string
-	kind       OperationKind
-	timeout    time.Duration
-	allowEmpty bool
+	name             string
+	kind             OperationKind
+	timeout          time.Duration
+	allowEmpty       bool
+	allowEmptyAny2xx bool
+	allowOpaque      bool
 }
 
 func (descriptor OperationDescriptor) Name() string                  { return descriptor.name }
 func (descriptor OperationDescriptor) Kind() OperationKind           { return descriptor.kind }
 func (descriptor OperationDescriptor) DefaultTimeout() time.Duration { return descriptor.timeout }
 func (descriptor OperationDescriptor) AllowsEmptyResponse() bool     { return descriptor.allowEmpty }
+func (descriptor OperationDescriptor) allowsEmptyAny2xxResponse() bool {
+	return descriptor.allowEmptyAny2xx
+}
+func (descriptor OperationDescriptor) allowsOpaqueResponse() bool { return descriptor.allowOpaque }
 
 func (operation Operation) Descriptor() (OperationDescriptor, error) {
 	switch operation {
@@ -71,6 +81,14 @@ func (operation Operation) Descriptor() (OperationDescriptor, error) {
 		return OperationDescriptor{name: "guest_raid_del_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
 	case GuestReadyPost:
 		return OperationDescriptor{name: "guest_ready_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
+	case ParPost:
+		return OperationDescriptor{name: "par_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
+	case ParDelete:
+		return OperationDescriptor{name: "par_delete", kind: WriteOperation, timeout: 15 * time.Second, allowEmpty: true, allowEmptyAny2xx: true, allowOpaque: true}, nil
+	case HostReadyPost:
+		return OperationDescriptor{name: "host_ready_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
+	case HostKicksGuestPost:
+		return OperationDescriptor{name: "host_kicks_guest_post", kind: WriteOperation, timeout: 15 * time.Second}, nil
 	case CookieGet:
 		return OperationDescriptor{name: "cookie_get", kind: ReadOperation, timeout: 10 * time.Second}, nil
 	case MyListGet:

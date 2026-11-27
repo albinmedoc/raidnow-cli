@@ -1,7 +1,9 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -109,6 +111,123 @@ func (client *Client) ReadyRaid(ctx context.Context, token, raidID string, optio
 		return err
 	}
 	return acknowledgeWrite(GuestReadyPost, raw, token)
+}
+
+// CreateHostedRaid creates one host-owned raid lobby without retrying writes.
+func (client *Client) CreateHostedRaid(ctx context.Context, token string, trainer domain.Trainer, input HostLobbyInput, options CallOptions) (domain.Raid, error) {
+	filters, filtersOK := normalizeValuesBounded(input.Filters, true, maxLobbyFilters)
+	weatherBoosts, boostsOK := normalizeValues(input.WeatherBoosts, true)
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || trainer.NameFormValue() == "" || trainer.CodeFormValue() == "" ||
+		trainer.LevelFormValue() == "0" || trainer.CountryFormValue() == "" || !safeValue(input.StartDate, true) ||
+		!safeValue(input.Rank, true) || !safeValue(input.PokemonID, true) || input.Span <= 0 || input.MaxUsers < 1 || input.MaxUsers > 10 ||
+		input.Color < 0 || input.Color > 3 || input.Weather < 0 || input.Weather > 1 || input.CurrentWeather < 0 || input.CurrentWeather > 9 ||
+		input.GymColor < 0 || input.GymColor > 3 || input.PassType < 0 || input.PassType > 1 || (input.PassType == 0 && input.MaxUsers == 10) ||
+		!validHostedGuestLevel(input.GuestLevel) || input.GuestScore < -1 || input.GuestScore > 5 || !filtersOK || !boostsOK {
+		return domain.Raid{}, invalidArguments("Ogiltig värdlobby.")
+	}
+	form := url.Values{
+		"start_date": {input.StartDate}, "rank": {input.Rank}, "pokemon": {input.PokemonID}, "span": {strconv.Itoa(input.Span)},
+		"code": {trainer.CodeFormValue()}, "level": {trainer.LevelFormValue()}, "color": {strconv.Itoa(input.Color)}, "tid": {trainer.NameFormValue()},
+		"weather": {strconv.Itoa(input.Weather)}, "current_weather": {strconv.Itoa(input.CurrentWeather)}, "maxuser": {strconv.Itoa(input.MaxUsers)},
+		"gpcolor": {strconv.Itoa(input.GymColor)}, "passtype": {strconv.Itoa(input.PassType)}, "private": {zeroOne(input.Private)},
+		"possible": {strconv.FormatBool(input.Possible)}, "lang": {"1"}, "country_code": {trainer.CountryFormValue()},
+		"glevel": {strconv.Itoa(input.GuestLevel)}, "gescore": {strconv.Itoa(input.GuestScore)}, "invitation_only": {zeroOne(input.InvitationOnly)},
+		"hot": {zeroOne(input.Hot)}, "mega_pokemon_entry": {zeroOne(input.MegaPokemonEntry)}, "regional_raid": {"0"},
+		"token": {token},
+	}
+	if len(filters) > 0 {
+		form["filter[]"] = filters
+	}
+	if len(weatherBoosts) > 0 {
+		form["weather_boost[]"] = weatherBoosts
+	}
+	raw, err := client.PostForm(ctx, ParPost, form, options)
+	if err != nil {
+		return domain.Raid{}, err
+	}
+	if err := acknowledgeWrite(ParPost, raw, token, trainer.CodeFormValue()); err != nil {
+		return domain.Raid{}, err
+	}
+	object, err := decodeObject(raw)
+	if err != nil {
+		return domain.Raid{}, err
+	}
+	raids, err := decodeRaids(raw)
+	if err != nil {
+		return domain.Raid{}, err
+	}
+	index, ok := optionalStrictInt(object, "now")
+	if !ok || index == nil || *index < 0 || *index >= len(raids) {
+		return domain.Raid{}, upstreamRejection()
+	}
+	return raids[*index], nil
+}
+
+// CloseHostedRaid closes one host-owned lobby without retrying writes.
+func (client *Client) CloseHostedRaid(ctx context.Context, token, raidID string, options CallOptions) error {
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || !safeValue(raidID, true) {
+		return invalidArguments("Ogiltigt raid-id.")
+	}
+	raw, err := client.PostForm(ctx, ParDelete, url.Values{"parid": {raidID}, "token": {token}}, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeOpaqueWrite(ParDelete, raw, token)
+}
+
+// StartHostedRaid announces that one hosted raid is starting.
+func (client *Client) StartHostedRaid(ctx context.Context, token, raidID string, options CallOptions) error {
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || !safeValue(raidID, true) {
+		return invalidArguments("Ogiltigt raid-id.")
+	}
+	raw, err := client.PostForm(ctx, HostReadyPost, url.Values{"edit": {raidID}, "lang": {"1"}, "token": {token}}, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeWrite(HostReadyPost, raw, token)
+}
+
+// KickHostedGuest removes one exact guest from a hosted lobby.
+func (client *Client) KickHostedGuest(ctx context.Context, token, raidID, guestID string, options CallOptions) error {
+	if ctx == nil || !session.AnonymousTokenIsValid(token) || !safeValue(raidID, true) || !safeValue(guestID, true) {
+		return invalidArguments("Ogiltigt raid- eller gäst-id.")
+	}
+	raw, err := client.PostForm(ctx, HostKicksGuestPost, url.Values{"edit": {raidID}, "kick": {guestID}, "lang": {"1"}, "token": {token}}, options)
+	if err != nil {
+		return err
+	}
+	return acknowledgeWrite(HostKicksGuestPost, raw, token)
+}
+
+func acknowledgeOpaqueWrite(operation Operation, raw []byte, secrets ...string) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || !json.Valid(trimmed) {
+		return nil
+	}
+	object, err := decodeObject(trimmed)
+	if err != nil {
+		return nil
+	}
+	if _, present := object["status"]; !present {
+		return nil
+	}
+	return acknowledgeWrite(operation, trimmed, secrets...)
+}
+
+func validHostedGuestLevel(value int) bool {
+	switch value {
+	case 0, 40, 50, 60, 70:
+		return true
+	default:
+		return false
+	}
+}
+
+func zeroOne(value bool) string {
+	if value {
+		return "1"
+	}
+	return "0"
 }
 
 func acknowledgeWrite(operation Operation, raw []byte, secrets ...string) error {
